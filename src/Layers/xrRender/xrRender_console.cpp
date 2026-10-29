@@ -7,6 +7,26 @@
 #include "../../build_config_defines.h"
 
 u32 ps_Preset = 2;
+u32 ps_r_dlss_quality = 0;
+// Default to DLSS selection for compatibility with existing DLSS-only configs.
+// Its quality defaults to Off, so a fresh installation still renders natively.
+u32 ps_r_upscaler = 1;
+u32 ps_r_fsr3_quality = 1;
+xr_token upscaler_token[] = {{"off", 0}, {"dlss", 1}, {"fsr3", 2}, {nullptr, 0}};
+xr_token fsr3_quality_token[] = {
+    {"native_aa", 0}, {"ultra_quality", 5}, {"quality", 1}, {"balanced", 2},
+    {"performance", 3}, {"ultra_performance", 4}, {nullptr, 0}
+};
+u32 ps_r_dlss_preset = 0;
+float ps_r_dlss_sharpness = 0.0f;
+int ps_r_upscaler_debug = 0;
+xr_token dlss_preset_token[] = {
+    {"default", 0}, {"j", 10}, {"k", 11}, {"l", 12}, {"m", 13}, {nullptr, 0}
+};
+xr_token dlss_quality_token[] = {
+    {"off", 0}, {"dlaa", 1}, {"ultra_quality", 6}, {"quality", 2}, {"balanced", 3},
+    {"performance", 4}, {"ultra_performance", 5}, {nullptr, 0}
+};
 xr_token qpreset_token [ ] = {
 	{"Minimum", 0},
 	{"Low", 1},
@@ -114,6 +134,17 @@ xr_token screenshot_mode_token [ ] = {
 //	“DX10.0 style [Standard]”
 //	“DX10.1 style [Higher quality]”
 
+#ifdef XR_DX12_BRIDGE
+// Method switches between DLSS and FSR rebuild DX12 presentation on vid_restart.
+u32 ps_r_frame_generation = 0;
+int ps_r_fg_diagnostics = 0; // Latched at bridge creation.
+static xr_token frame_generation_token[] = {{"off",0},{"dlss",1},{"fsr",2},{nullptr,0}};
+// DX12-only: AMD FSR through the bridge (FSR 4 on supported Radeon GPUs).
+static xr_token upscaler_token_dx12[] = {{"off", 0}, {"dlss", 1}, {"fsr3", 2}, {"fsr4", 3}, {nullptr, 0}};
+#endif
+
+
+
 // Common
 extern int psSkeletonUpdate;
 extern float r__dtex_range;
@@ -129,6 +160,12 @@ float ps_r__Detail_l_ambient = 0.9f;
 float ps_r__Detail_l_aniso = 0.25f;
 float ps_r__Detail_density = 0.3f;
 float ps_r__Detail_height = 1.0f;
+// Distance-based grass density falloff (render-time, RADIUS-RELATIVE). Full density
+// within 'knee' (a FRACTION of the grass radius dm_fade / r__detail_radius), then
+// falls to zero at the radius edge along a power curve. Auto-covers the field at any
+// radius. knee>=1.0 disables it.
+float ps_r__Detail_density_knee = 1.00f; // radius fraction kept fully dense (1.0 -> linear/vanilla SSA distribution)
+float ps_r__Detail_density_curve = 2.00f; // falloff exponent: >1 drop hard after knee, <1 hold then cliff at edge, 1 linear
 float ps_r__Detail_rainbow_hemi = 0.75f;
 
 float ps_r__Tree_w_rot = 10.0f;
@@ -545,6 +582,60 @@ float r_rain_k = 99.0f;
 #include	"../../xrEngine/xr_ioconsole.h"
 #include	"../../xrEngine/xr_ioc_cmd.h"
 #include	"../../xrEngine/shader_bus.h"
+
+#if defined(USE_DX11)
+#include "../xrRenderPC_R4/Dlss/DlssIntegration.h"
+
+// Offers only choices this GPU/runtime supports to the options menu and console tips.
+// Parsing and saving keep the full list, so configs stay valid on other hardware,
+// and the current value is always listed so it can be changed away from.
+class CCC_SupportedToken : public CCC_Token
+{
+    using Supported = bool (*)(unsigned id);
+    Supported m_supported;
+    xr_vector<xr_token> m_visible;
+public:
+    CCC_SupportedToken(LPCSTR name, u32* value, xr_token* tokens, Supported supported)
+        : CCC_Token(name, value, tokens), m_supported(supported) {}
+    xr_token* GetToken() override
+    {
+        // Before the device exists nothing can be probed: offer everything.
+        if (!HW.pDevice) return tokens;
+        m_visible.clear();
+        for (xr_token* token = tokens; token->name; ++token)
+            if (token->id == int(*value) || m_supported(unsigned(token->id))) m_visible.push_back(*token);
+        m_visible.push_back({nullptr, 0});
+        return m_visible.data();
+    }
+};
+
+// Read-only capability summary for the options script; never saved to user.ltx.
+class CCC_UpscalerSupport : public IConsole_Command
+{
+public:
+    CCC_UpscalerSupport(LPCSTR name) : IConsole_Command(name) { bEmptyArgsHandled = TRUE; }
+    void Execute(LPCSTR) override
+    {
+        TStatus status;
+        Status(status);
+        Msg("%s %s", cName, status);
+    }
+    void Status(TStatus& status) override
+    {
+        if (!HW.pDevice) { xr_strcpy(status, "unknown"); return; }
+        dlss::SupportSummary(status, sizeof(status));
+    }
+    void Save(IWriter*) override {}
+};
+
+// Session-only: a debug view must not survive a restart through user.ltx.
+class CCC_UnsavedInteger : public CCC_Integer
+{
+public:
+    CCC_UnsavedInteger(LPCSTR name, int* value, int min, int max) : CCC_Integer(name, value, min, max) {}
+    void Save(IWriter*) override {}
+};
+#endif
 
 #if defined(USE_DX10) || defined(USE_DX11)
 #include "../xrRenderDX10/StateManager/dx10SamplerStateCache.h"
@@ -1341,6 +1432,8 @@ void xrRender_initconsole()
 	CMD4(CCC_Float, "r__detail_density", &ps_current_detail_density/*&ps_r__Detail_density*/, 0.04f/*.2f*/, 1.f);
 	//AVO: extended from 0.2 to 0.04 and replaced variable
 	CMD4(CCC_Float, "r__detail_height", &ps_current_detail_height, 0.5f, 2.0f);
+	CMD4(CCC_Float, "r__detail_density_knee", &ps_r__Detail_density_knee, 0.0f, 1.0f);
+	CMD4(CCC_Float, "r__detail_density_curve", &ps_r__Detail_density_curve, 0.25f, 12.0f);
 
 #ifdef DEBUG
 	CMD4(CCC_Float,		"r__detail_l_ambient",	&ps_r__Detail_l_ambient,	.5f,	.95f	);
@@ -1556,6 +1649,24 @@ void xrRender_initconsole()
 	CMD3(CCC_Mask, "r2_mblur_enabled", &ps_r2_anomaly_flags, R2_AN_FLAG_MBLUR);
 	CMD3(CCC_Mask, "r__lens_flares", &ps_r2_anomaly_flags, R2_AN_FLAG_FLARES);
 	CMD3(CCC_Token, "r2_smaa", &ps_smaa_quality, smaa_quality_token);
+#if defined(USE_DX11)
+	CMD3(CCC_Token, "r_dlss_quality", &ps_r_dlss_quality, dlss_quality_token);
+#ifdef XR_DX12_BRIDGE
+	CMD4(CCC_SupportedToken, "r_upscaler", &ps_r_upscaler, upscaler_token_dx12, &dlss::UpscalerSupported);
+#else
+	CMD4(CCC_SupportedToken, "r_upscaler", &ps_r_upscaler, upscaler_token, &dlss::UpscalerSupported);
+#endif
+	CMD1(CCC_UpscalerSupport, "r_upscaler_support");
+#ifdef XR_DX12_BRIDGE
+    CMD4(CCC_SupportedToken, "r_frame_generation", &ps_r_frame_generation, frame_generation_token, &dlss::FrameGenerationSupported);
+    CMD4(CCC_Integer, "r_fg_diagnostics", &ps_r_fg_diagnostics, 0, 1);
+#endif
+	CMD3(CCC_Token, "r_fsr3_quality", &ps_r_fsr3_quality, fsr3_quality_token);
+	CMD3(CCC_Token, "r_dlss_preset", &ps_r_dlss_preset, dlss_preset_token);
+	CMD4(CCC_Float, "r_dlss_sharpness", &ps_r_dlss_sharpness, 0.0f, 1.0f);
+	// 1 = upscaler input (render resolution, stretched), 2 = motion vectors
+	CMD4(CCC_UnsavedInteger, "r_upscaler_debug", &ps_r_upscaler_debug, 0, 2);
+#endif
 	CMD3(CCC_Mask,		"r2_gi",				&ps_r2_ls_flags,			R2FLAG_GI);
 	CMD4(CCC_Float,		"r2_gi_clip",			&ps_r2_GI_clip,				EPS,	0.1f	);
 	CMD4(CCC_Integer,	"r2_gi_depth",			&ps_r2_GI_depth,			1,		5		);

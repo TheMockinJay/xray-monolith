@@ -1,0 +1,47 @@
+CREDITS AND COMPONENT NOTICES
+============================
+OGSR team and xrSimpAI - original DLSS implementation
+https://github.com/OGSR/OGSR-Engine
+
+GSC Game World / Anomaly / xray-monolith:
+https://github.com/themrdemonized/xray-monolith
+Engine base: all-in-one-vs2022-wpo-mt.
+GSC's non-commercial engine license is reproduced in the binary packages.
+
+NVIDIA DLSS / NGX:
+https://github.com/NVIDIA/DLSS/releases/tag/v310.9.1
+This software contains source code provided by NVIDIA Corporation.
+The pinned release runtime and SDK are subject to their included license notices.
+
+AMD FidelityFX / CAS and community D3D11 backend contributors:
+FSR upscaler API version 3.1.2; community DX11 backend vendored from OGSR's
+dependency tree. Not AMD's officially supported DX12/Vulkan backend.
+AMD MIT license and accompanying third-party notices are included.
+
+DX12 presentation bridge (AnomalyDX12.exe, frame generation):
+Transport adapted from OGSR's D3D12PresentBridge, revision 6443f8426.
+Credits: OGSR team and xrSimpAI.
+
+NVIDIA Streamline 2.14.16 (DLSS Frame Generation 310.9.16, Reflex):
+https://github.com/NVIDIA-RTX/Streamline
+Unmodified NVIDIA-signed runtime; its license and notices are included.
+
+AMD FidelityFX SDK 2.3.0 (DX12 FSR upscaler and frame generation):
+https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK (tag v2.3.0)
+Unmodified AMD-signed runtime; MIT license included.
+
+Microsoft DirectX 12 Agility SDK 1.619.6 (D3D12Core.dll):
+NuGet package Microsoft.Direct3D.D3D12. Only the redistributable
+D3D12Core.dll is included, under its license.
+
+Shader providers (original author notices retained):
+Ascii1457 — Screen Space Shaders, audited Update23_5
+https://www.moddb.com/addons/screen-space-shaders
+Hippobot — Atmospherics, audited 2.69 RC7.5
+https://www.moddb.com/mods/stalker-anomaly/addons/hippos-shaders-and-atmospherics
+theRealBeef — Beef's shader-based NVGs, audited GAMMA package
+https://www.moddb.com/addons/beefs-shader-based-nvgs-v10
+
+These are compatibility overrides, not replacements for the full original mods.
+All other components retain their original ownership and applicable terms.
+No NVIDIA, AMD, GSC or GAMMA endorsement is claimed.

@@ -3,6 +3,12 @@
 #pragma once
 
 // Common
+extern ECORE_API u32 ps_r_dlss_quality;
+extern ECORE_API u32 ps_r_upscaler;
+extern ECORE_API u32 ps_r_fsr3_quality;
+extern ECORE_API u32 ps_r_dlss_preset;
+extern ECORE_API float ps_r_dlss_sharpness;
+extern ECORE_API int ps_r_upscaler_debug;
 extern ECORE_API float ps_ssfx_fog_scattering;
 extern ECORE_API Fvector4 ps_ssfx_motionblur;
 extern ECORE_API Fvector4 ps_ssfx_taa;
@@ -75,6 +81,8 @@ extern ECORE_API float ps_r__Detail_l_ambient;
 extern ECORE_API float ps_r__Detail_l_aniso;
 extern ECORE_API float ps_r__Detail_density;
 extern ECORE_API float ps_r__Detail_height;
+extern ECORE_API float ps_r__Detail_density_knee;
+extern ECORE_API float ps_r__Detail_density_curve;
 
 extern ECORE_API float ps_r__Tree_w_rot;
 extern ECORE_API float ps_r__Tree_w_speed;
