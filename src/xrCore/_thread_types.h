@@ -1,6 +1,7 @@
 #pragma once
 
 #include <tbb/task_group.h>
+#include <tbb/task_arena.h>
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/parallel_for.h>
@@ -48,7 +49,9 @@ public:
     {
         try
         {
-            m_group.wait();
+            tbb::this_task_arena::isolate([this] {
+                m_group.wait();
+            });
         }
         catch (const std::exception& e)
         {
@@ -68,7 +71,9 @@ public:
 
     void wait()
     {
-        m_group.wait();
+        tbb::this_task_arena::isolate([this] {
+            m_group.wait();
+        });
     }
 
 private:
@@ -84,13 +89,17 @@ using xr_concurrent_vector = tbb::concurrent_vector<T, allocator>;
 template<typename BlockRangeType, typename Body>
 inline void xr_parallel_for(BlockRangeType Begin, BlockRangeType End, Body Functor)
 {
-    tbb::parallel_for(Begin, End, Functor);
+    tbb::this_task_arena::isolate([&] {
+        tbb::parallel_for(Begin, End, Functor);
+    });
 }
 
 template<typename Index, typename Body>
 inline void xr_parallel_foreach(Index Begin, Index End, Body Functor)
 {
-    tbb::parallel_for_each(Begin, End, Functor);
+    tbb::this_task_arena::isolate([&] {
+        tbb::parallel_for_each(Begin, End, Functor);
+    });
 }
 
 // Helper to deduce the value type for the default predicate
@@ -107,5 +116,7 @@ using IsRandomAccess = std::is_base_of<
 template<typename RandomIt, typename P = std::less<IterValueT<RandomIt>>>
 IC void xr_parallel_sort(RandomIt first, RandomIt last, P pred = {})
 {
-    tbb::parallel_sort(first, last, pred);
+    tbb::this_task_arena::isolate([&] {
+        tbb::parallel_sort(first, last, pred);
+    });
 }
