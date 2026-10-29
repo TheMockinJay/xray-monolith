@@ -3,6 +3,8 @@
 
 #include "xrMemory_align.h"
 #include "xrMemory_pure.h"
+#include <tbb/scalable_allocator.h>
+#pragma comment(lib, "tbbmalloc.lib")
 
 #ifndef __BORLANDC__
 
@@ -35,9 +37,11 @@ ICF u32 get_pool(size_t size)
 	else return pid;
 }
 
+#ifndef PURE_ALLOC
 #define PURE_ALLOC
+#endif
 #define PURE_MEMORY_FILL_ZERO
-#define PURE_MEMORY_ALIGNMENT 1 << 4
+#define PURE_MEMORY_ALIGNMENT (1 << 4)
 
 void* xrMemory::mem_alloc(size_t size
 # ifdef DEBUG_MEMORY_NAME
@@ -49,11 +53,17 @@ void* xrMemory::mem_alloc(size_t size
 
 #ifdef PURE_ALLOC
 	{
-		//void* result = malloc(size);
-		void* result = _aligned_malloc(size, PURE_MEMORY_ALIGNMENT);
+		const size_t alloc_size = size ? size : 1;
+		void* result = scalable_aligned_malloc(alloc_size, PURE_MEMORY_ALIGNMENT);
 #ifdef PURE_MEMORY_FILL_ZERO
-		if (result && zeroMemory)
-			memset(result, 0, size);
+		if (result)
+		{
+			const size_t usable = scalable_msize(result);
+			if (zeroMemory)
+				memset(result, 0, usable >= alloc_size ? usable : alloc_size);
+			else if (usable > size)
+				memset(static_cast<u8*>(result) + size, 0, usable - size);
+		}
 #endif // PURE_MEMORY_FILL_ZERO
 
 #ifdef USE_MEMORY_MONITOR
@@ -137,8 +147,8 @@ void xrMemory::mem_free(void* P)
 
 #ifdef PURE_ALLOC
 	{
-		//free(P);
-		_aligned_free(P);
+		if (P)
+			scalable_aligned_free(P);
 		return;
 	}
 #endif // PURE_ALLOC
@@ -191,22 +201,21 @@ void* xrMemory::mem_realloc(void* P, size_t size
 
 #ifdef PURE_ALLOC
 	{
+		const size_t alloc_size = size ? size : 1;
 #ifdef PURE_MEMORY_FILL_ZERO
-		size_t old_size = P ? _aligned_msize(P, PURE_MEMORY_ALIGNMENT, 0) : 0;
-
-		// A shrink can stay in place with _aligned_msize still reporting the old size,
-		// so the growth zeroing below would start past the bytes being dropped now.
-		// Zero them here so they come back clean when the block grows again.
-		if (P && size && size < old_size)
-			memset((u8*)P + size, 0, old_size - size);
+		const size_t old_usable = scalable_msize(P);
 #endif // PURE_MEMORY_FILL_ZERO
 
-		//void* result = realloc(P, size);
-		void* result = _aligned_realloc(P, size, PURE_MEMORY_ALIGNMENT);
+		void* result = scalable_aligned_realloc(P, alloc_size, PURE_MEMORY_ALIGNMENT);
 
 #ifdef PURE_MEMORY_FILL_ZERO
-		if (result && size > old_size)
-			memset((u8*)result + old_size, 0, size - old_size);
+		if (result)
+		{
+			const size_t new_usable = scalable_msize(result);
+			const size_t zero_from = size < old_usable ? size : old_usable;
+			if (new_usable > zero_from)
+				memset(static_cast<u8*>(result) + zero_from, 0, new_usable - zero_from);
+		}
 #endif // PURE_MEMORY_FILL_ZERO
 
 # ifdef USE_MEMORY_MONITOR
