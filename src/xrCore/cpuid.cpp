@@ -55,10 +55,10 @@ int _cpuid(_processor_info* pinfo)
 
 	std::bitset<32> f_1_ECX;
 	std::bitset<32> f_1_EDX;
-	/*std::bitset<32> f_7_EBX;
+	std::bitset<32> f_7_EBX;
 	std::bitset<32> f_7_ECX;
-	std::bitset<32> f_81_ECX;*/
 	std::bitset<32> f_81_EDX;
+	std::bitset<32> f_87_EDX;
 
 	xr_vector<std::array<int, 4>> data;
 	std::array<int, 4> cpui;
@@ -73,12 +73,11 @@ int _cpuid(_processor_info* pinfo)
 	}
 
 	memset(pinfo->v_name, 0, sizeof(pinfo->v_name));
-	*reinterpret_cast<int*>(pinfo->v_name) = data[0][1];
-	*reinterpret_cast<int*>(pinfo->v_name + 4) = data[0][3];
-	*reinterpret_cast<int*>(pinfo->v_name + 8) = data[0][2];
+	memcpy(pinfo->v_name, &data[0][1], 4);
+	memcpy(pinfo->v_name + 4, &data[0][3], 4);
+	memcpy(pinfo->v_name + 8, &data[0][2], 4);
 
-	//const bool isIntel = std::strncmp(pinfo->vendor, "GenuineIntel", 12);
-	const bool isAmd = strncmp(pinfo->v_name, "AuthenticAMD", 12) != 0;
+	const bool isAmd = (strncmp(pinfo->v_name, "AuthenticAMD", 12) == 0);
 
 	// load bitset with flags for function 0x00000001
 	if (nIds >= 1)
@@ -88,11 +87,11 @@ int _cpuid(_processor_info* pinfo)
 	}
 
 	// load bitset with flags for function 0x00000007
-	/*if (nIds >= 7)
+	if (nIds >= 7)
 	{
-	f_7_EBX = data[7][1];
-	f_7_ECX = data[7][2];
-	}*/
+		f_7_EBX = data[7][1];
+		f_7_ECX = data[7][2];
+	}
 
 	__cpuid(cpui.data(), 0x80000000);
 	const int nExIds_ = cpui[0];
@@ -130,6 +129,11 @@ int _cpuid(_processor_info* pinfo)
 	if (f_1_ECX[9]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_SSSE3);
 	if (f_1_ECX[19]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_SSE4_1);
 	if (f_1_ECX[20]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_SSE4_2);
+	if (f_1_ECX[28]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_AVX);
+	if (f_7_EBX[5]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_AVX2);
+	if (f_7_ECX[5]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_WAITPKG);
+	if (f_81_EDX[27]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_RDTSCP);
+	if (f_87_EDX[8]) pinfo->feature |= static_cast<u32>(_CPU_FEATURE_INVARIANT_TSC);
 
 	__cpuid(cpui.data(), 1);
 

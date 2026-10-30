@@ -14,6 +14,12 @@
 #define _CPU_FEATURE_MWAIT 0x0100
 #define _CPU_FEATURE_HTT 0x0200
 
+#define _CPU_FEATURE_AVX 0x0400
+#define _CPU_FEATURE_AVX2 0x0800
+#define _CPU_FEATURE_INVARIANT_TSC 0x1000
+#define _CPU_FEATURE_RDTSCP 0x2000
+#define _CPU_FEATURE_WAITPKG 0x4000
+
 struct _processor_info
 {
 	char v_name[13]; // vendor name
