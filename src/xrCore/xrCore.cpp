@@ -45,11 +45,13 @@ void xrCore::_initialize(LPCSTR _ApplicationName, xrLogger::LogCallback cb, BOOL
 	if (0 == init_counter)
 	{
 #ifdef XRCORE_STATIC
+#ifndef _M_AMD64
 		_clear87();
 		_control87(_PC_53, MCW_PC);
 		_control87(_RC_CHOP, MCW_RC);
 		_control87(_RC_NEAR, MCW_RC);
 		_control87(_MCW_EM, MCW_EM);
+#endif
 #endif
 		Params = xr_strdup(GetCommandLine());
 		xr_strlwr(Params);
@@ -195,11 +197,13 @@ BOOL DllMainXrCore(HANDLE hinstDLL, DWORD ul_reason_for_call, LPVOID lpvReserved
 	{
 	case DLL_PROCESS_ATTACH:
 		{
+#ifndef _M_AMD64
 			_clear87();
 			_control87(_PC_53, MCW_PC);
 			_control87(_RC_CHOP, MCW_RC);
 			_control87(_RC_NEAR, MCW_RC);
 			_control87(_MCW_EM, MCW_EM);
+#endif
 		}
 		//. LogFile.reserve (256);
 		break;

@@ -1090,8 +1090,16 @@ Fvector3 ssfx_wetness_multiplier = Fvector3().set(1.0f, 0.3f, 0.0f);
 
 BOOL dump_cvar_enable = TRUE;
 
+class CCC_TimerBenchmark : public IConsole_Command
+{
+public:
+    CCC_TimerBenchmark(LPCSTR N) : IConsole_Command(N) { bEmptyArgsHandled = true; };
+    virtual void Execute(LPCSTR args) { CPU::TimerBenchmark(); }
+};
+
 void CCC_Register()
 {
+    CMD1(CCC_TimerBenchmark, "timer_benchmark");
 	// General
 	CMD1(CCC_Help, "help");
 	CMD1(CCC_Quit, "quit");

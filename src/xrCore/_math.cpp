@@ -12,6 +12,7 @@
 #include <mmsystem.h>
 
 #include "profiler.h"
+#include "cpuid.h"
 
 // Initialized on startup
 XRCORE_API Fmatrix Fidentity;
@@ -23,45 +24,14 @@ u16 getFPUsw() { return 0; }
 
 namespace FPU
 {
-	XRCORE_API void m24(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_CHOP, MCW_RC);
-	}
+	XRCORE_API void m24(void) {}
+	XRCORE_API void m24r(void) {}
+	XRCORE_API void m53(void) {}
+	XRCORE_API void m53r(void) {}
+	XRCORE_API void m64(void) {}
+	XRCORE_API void m64r(void) {}
 
-	XRCORE_API void m24r(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_NEAR, MCW_RC);
-	}
-
-	XRCORE_API void m53(void)
-	{
-		_control87(_PC_53, MCW_PC);
-		_control87(_RC_CHOP, MCW_RC);
-	}
-
-	XRCORE_API void m53r(void)
-	{
-		_control87(_PC_53, MCW_PC);
-		_control87(_RC_NEAR, MCW_RC);
-	}
-
-	XRCORE_API void m64(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_CHOP, MCW_RC);
-	}
-
-	XRCORE_API void m64r(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_NEAR, MCW_RC);
-	}
-
-	void initialize()
-	{
-	}
+	void initialize() {}
 };
 #else
 u16 getFPUsw()
@@ -146,6 +116,7 @@ void initialize()
 
 namespace CPU
 {
+	XRCORE_API bool bUseInvariantTSC = false;
 	XRCORE_API u64 clk_per_second;
 	XRCORE_API u64 clk_per_milisec;
 	XRCORE_API u64 clk_per_microsec;
@@ -153,17 +124,28 @@ namespace CPU
 	XRCORE_API float clk_to_seconds;
 	XRCORE_API float clk_to_milisec;
 	XRCORE_API float clk_to_microsec;
-	XRCORE_API u64 qpc_freq = 0;
+	alignas(64) XRCORE_API u64 qpc_freq = 0;
 	XRCORE_API u64 qpc_overhead = 0;
-	XRCORE_API u32 qpc_counter = 0;
+	alignas(64) XRCORE_API u32 qpc_counter = 0;
+
+	static u64 tsc_base = 0;
+	static u64 qpc_base = 0;
+	static u64 qpc_mul = 0;
+	static double qpc_scale = 1.0;
 
 	XRCORE_API _processor_info ID;
 
 	XRCORE_API u64 QPC()
 	{
+		if (bUseInvariantTSC)
+		{
+			const u64 delta_tsc = __rdtsc() - tsc_base;
+			u64 hi = 0;
+			const u64 lo = _umul128(delta_tsc, qpc_mul, &hi);
+			return qpc_base + ((hi << 32) | (lo >> 32));
+		}
 		u64 _dest;
 		QueryPerformanceCounter((PLARGE_INTEGER)&_dest);
-		qpc_counter++;
 		return _dest;
 	}
 
@@ -281,6 +263,11 @@ void _initialize_cpu(void)
 	if (CPU::ID.feature & _CPU_FEATURE_SSE4_1)xr_strcat(features, ", SSE4.1");
 	if (CPU::ID.feature & _CPU_FEATURE_SSE4_2)xr_strcat(features, ", SSE4.2");
 	if (CPU::ID.feature & _CPU_FEATURE_HTT) xr_strcat(features, ", HTT");
+	if (CPU::ID.feature & _CPU_FEATURE_AVX) xr_strcat(features, ", AVX");
+	if (CPU::ID.feature & _CPU_FEATURE_AVX2) xr_strcat(features, ", AVX2");
+	if (CPU::ID.feature & _CPU_FEATURE_INVARIANT_TSC) xr_strcat(features, ", Invariant TSC");
+	if (CPU::ID.feature & _CPU_FEATURE_RDTSCP) xr_strcat(features, ", RDTSCP");
+	if (CPU::ID.feature & _CPU_FEATURE_WAITPKG) xr_strcat(features, ", WAITPKG");
 
 	Msg("* CPU features: %s", features);
 	Msg("* CPU cores/threads: %d/%d\n", CPU::ID.n_cores, CPU::ID.n_threads);
@@ -290,6 +277,12 @@ void _initialize_cpu(void)
 	pvInitializeStatics(); // Lookup table for compressed normals
 	FPU::initialize();
 	_initialize_cpu_thread();
+
+	Msg("* [Timer] Invariant TSC: %s", CPU::bUseInvariantTSC ? "SUPPORTED" : "NOT SUPPORTED");
+	Msg("* [Timer] Active Root QPC: %s", CPU::bUseInvariantTSC ? "HARDWARE INVARIANT RDTSC (Sub-8ns, 0-HAL)" : "Windows QPC (HAL Trap)");
+	Msg("* [Timer] Calibrated Frequency: %.2f MHz (Period: %.4f ns)", float(CPU::clk_per_second / 1000000.0), (1000000000.0 / double(CPU::clk_per_second)));
+	Msg("* [Timer] QPC Scale Factor: %.6f (10.00 MHz Target)", CPU::qpc_scale);
+	CPU::TimerBenchmark();
 
 	g_initialize_cpu_called = true;
 }
@@ -379,6 +372,12 @@ void __cdecl thread_entry(void* _params)
 	void* arglist = startup->args;
 	_initialize_cpu_thread();
 
+	Msg("* [Timer] Invariant TSC: %s", CPU::bUseInvariantTSC ? "SUPPORTED" : "NOT SUPPORTED");
+	Msg("* [Timer] Active Root QPC: %s", CPU::bUseInvariantTSC ? "HARDWARE INVARIANT RDTSC (Sub-8ns, 0-HAL)" : "Windows QPC (HAL Trap)");
+	Msg("* [Timer] Calibrated Frequency: %.2f MHz (Period: %.4f ns)", float(CPU::clk_per_second / 1000000.0), (1000000000.0 / double(CPU::clk_per_second)));
+	Msg("* [Timer] QPC Scale Factor: %.6f (10.00 MHz Target)", CPU::qpc_scale);
+	CPU::TimerBenchmark();
+
 	// emit profiler thread
 	PROF_THREAD(startup->name);
 
@@ -408,6 +407,12 @@ unsigned __stdcall thread_entry_ex(void* _params)
     thread_t* entry = startup->entry;
     void* arglist = startup->args;
     _initialize_cpu_thread();
+
+	Msg("* [Timer] Invariant TSC: %s", CPU::bUseInvariantTSC ? "SUPPORTED" : "NOT SUPPORTED");
+	Msg("* [Timer] Active Root QPC: %s", CPU::bUseInvariantTSC ? "HARDWARE INVARIANT RDTSC (Sub-8ns, 0-HAL)" : "Windows QPC (HAL Trap)");
+	Msg("* [Timer] Calibrated Frequency: %.2f MHz (Period: %.4f ns)", float(CPU::clk_per_second / 1000000.0), (1000000000.0 / double(CPU::clk_per_second)));
+	Msg("* [Timer] QPC Scale Factor: %.6f (10.00 MHz Target)", CPU::qpc_scale);
+	CPU::TimerBenchmark();
 
     // emit profiler thread
     PROF_THREAD(startup->name);

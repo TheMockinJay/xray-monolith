@@ -24,6 +24,8 @@ namespace CPU
 	XRCORE_API extern float clk_to_microsec;
 
 	XRCORE_API extern u64 qpc_freq;
+	XRCORE_API extern bool bUseInvariantTSC;
+	XRCORE_API void TimerBenchmark();
 	XRCORE_API extern u64 qpc_overhead;
 	XRCORE_API extern u32 qpc_counter;
 
