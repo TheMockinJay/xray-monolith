@@ -1,6 +1,10 @@
 #include "stdafx.h"
 #include <malloc.h>
 #include <errno.h>
+#include <atomic>
+#include <psapi.h>
+
+extern std::atomic<size_t> g_xr_allocated_bytes;
 
 XRCORE_API void vminfo(size_t* _free, size_t* reserved, size_t* committed)
 {
@@ -28,45 +32,55 @@ XRCORE_API void vminfo(size_t* _free, size_t* reserved, size_t* committed)
 xrCriticalSection mem_lock;
 XRCORE_API void log_vminfo()
 {
-    xrCriticalSectionGuard g(mem_lock);
+	xrCriticalSectionGuard g(mem_lock);
 	PROF_EVENT("log_vminfo");
-	size_t w_free, w_reserved, w_committed;
-	vminfo(&w_free, &w_reserved, &w_committed);
+	MEMORY_BASIC_INFORMATION memory_info;
+	memory_info.BaseAddress = 0;
+	size_t w_free = 0, w_reserved = 0, w_committed = 0;
+	size_t c_private = 0, c_mapped = 0, c_image = 0;
+	while (VirtualQuery(memory_info.BaseAddress, &memory_info, sizeof(memory_info)))
+	{
+		switch (memory_info.State)
+		{
+		case MEM_FREE:
+			w_free += memory_info.RegionSize;
+			break;
+		case MEM_RESERVE:
+			w_reserved += memory_info.RegionSize;
+			break;
+		case MEM_COMMIT:
+			w_committed += memory_info.RegionSize;
+			if (memory_info.Type == MEM_PRIVATE) c_private += memory_info.RegionSize;
+			else if (memory_info.Type == MEM_MAPPED) c_mapped += memory_info.RegionSize;
+			else if (memory_info.Type == MEM_IMAGE) c_image += memory_info.RegionSize;
+			break;
+		}
+		memory_info.BaseAddress = (char*)memory_info.BaseAddress + memory_info.RegionSize;
+	}
+	PROCESS_MEMORY_COUNTERS_EX pmc = {};
+	pmc.cb = sizeof(pmc);
+	K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
+	const size_t tbb_live = g_xr_allocated_bytes.load(std::memory_order_relaxed);
 	Msg(
-		"* [win32]: free[%lld K], reserved[%lld K], committed[%lld K]",
+		"* [win32]: free[%lld K], reserved[%lld K], committed[%lld K] (private[%lld K], mapped[%lld K], image[%lld K])",
 		w_free / 1024,
 		w_reserved / 1024,
-		w_committed / 1024
+		w_committed / 1024,
+		c_private / 1024,
+		c_mapped / 1024,
+		c_image / 1024
+	);
+	Msg(
+		"* [win32]: working_set[%lld K], private_bytes[%lld K], tbbmalloc_live[%lld K], non_tbb_private[%lld K]",
+		pmc.WorkingSetSize / 1024,
+		pmc.PrivateUsage / 1024,
+		tbb_live / 1024,
+		(pmc.PrivateUsage > tbb_live ? (pmc.PrivateUsage - tbb_live) : 0) / 1024
 	);
 }
 
 size_t xrMemory::mem_usage(bool assert)
 {
-    xrCriticalSectionGuard g(mem_lock);
-	PROF_EVENT("mem_usage");
-	_HEAPINFO hinfo = {};
-	int status;
-	size_t bytesUsed = 0;
-	while ((status = _heapwalk(&hinfo)) == _HEAPOK)
-	{
-		if (hinfo._useflag == _USEDENTRY)
-			bytesUsed += hinfo._size;
-	}
-	switch (status)
-	{
-	case _HEAPEMPTY:
-		break;
-	case _HEAPEND:
-		break;
-	case _HEAPBADPTR:
-		if (assert) FATAL("bad pointer to heap");
-		break;
-	case _HEAPBADBEGIN:
-        if (assert) FATAL("bad start of heap");
-		break;
-	case _HEAPBADNODE:
-        if (assert) FATAL("bad node in heap");
-		break;
-	}
-	return bytesUsed;
+	(void)assert;
+	return g_xr_allocated_bytes.load(std::memory_order_relaxed);
 }

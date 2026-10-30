@@ -510,6 +510,8 @@ Shader* CResourceManager::_CreateShader(Shader* InShader)
 void CResourceManager::_GetMemoryUsage(u32& m_base, u32& c_base, u32& m_lmaps, u32& c_lmaps)
 {
 	m_base = c_base = m_lmaps = c_lmaps = 0;
+	u64 total_base_64 = 0;
+	u64 total_lmap_64 = 0;
 
 	map_Texture::iterator I = m_textures.begin();
 	map_Texture::iterator E = m_textures.end();
@@ -520,13 +522,16 @@ void CResourceManager::_GetMemoryUsage(u32& m_base, u32& c_base, u32& m_lmaps, u
 		{
 			c_lmaps ++;
 			m_lmaps += m;
+			total_lmap_64 += m;
 		}
 		else
 		{
 			c_base ++;
 			m_base += m;
+			total_base_64 += m;
 		}
 	}
+	Msg("* [ D3D 64-bit ]: base_textures[%u : %llu K], lmap_textures[%u : %llu K], total_true[%llu K]", c_base, total_base_64 / 1024, c_lmaps, total_lmap_64 / 1024, (total_base_64 + total_lmap_64) / 1024);
 }
 
 void CResourceManager::_DumpMemoryUsage()
