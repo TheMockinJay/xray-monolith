@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <immintrin.h>
 #ifdef XR_DX12_BRIDGE
 #include "../Layers/xrRenderPC_R4/Dlss/FrameGeneration.h"
 
@@ -543,6 +544,7 @@ void CRenderDevice::on_idle()
 		time_span = std::chrono::duration_cast<std::chrono::duration<float>>(tcurrentf - tlastf);
 		while (time_span.count() < rr)
 		{
+			_mm_pause();
 			tcurrentf = std::chrono::high_resolution_clock::now();
 			time_span = std::chrono::duration_cast<std::chrono::duration<float>>(tcurrentf - tlastf);
 		}

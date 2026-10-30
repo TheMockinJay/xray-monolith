@@ -328,17 +328,7 @@ void execUserScript()
 
 void slowdownthread(void*)
 {
-	PROF_EVENT();
-
-	// Sleep (30*1000);
-	for (;;)
-	{
-		if (Device.Statistic->fFPS < 30) Sleep(1);
-		if (0 == pSettings) return;
-		if (0 == Console) return;
-		if (0 == pInput) return;
-		if (0 == pApp) return;
-	}
+	return;
 }
 
 void CheckPrivilegySlowdown()

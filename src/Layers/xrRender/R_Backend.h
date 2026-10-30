@@ -263,10 +263,7 @@ public:
 			VERIFY(!"Invalid texture stage");
 		}
 #endif
-		while (T&&!T->flags.bLoaded)
-		{
-			SwitchToThread();
-		}
+		xrSpinWait w; while (T && !T->flags.bLoaded) { w(); }
 		return T;
 	}
 

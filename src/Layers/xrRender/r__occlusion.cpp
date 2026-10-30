@@ -1,4 +1,5 @@
 #include "StdAfx.h"
+#include <immintrin.h>
 #include ".\r__occlusion.h"
 
 #include "QueryHelper.h"
@@ -152,6 +153,7 @@ R_occlusion::occq_result R_occlusion::occq_get(u32& ID)
 	while ((hr = GetData(used[ID].Q, &fragments, sizeof(fragments))) == S_FALSE)
 	{
 		PROF_EVENT("GPU::GetData");
+		_mm_pause();
 		if (!SwitchToThread())
 			Sleep(ps_r2_wait_sleep);
 

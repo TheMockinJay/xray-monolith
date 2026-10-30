@@ -69,7 +69,7 @@ public:
 #endif	//	USE_DX10
 
 private:
-	IC void wait_for_loading() const { while (flags.bLoading){SwitchToThread();} }
+	IC void wait_for_loading() const { xrSpinWait w; while (flags.bLoading){w();} }
 	IC BOOL desc_valid() { wait_for_loading(); return pSurface==desc_cache; }
 	IC void desc_enshure() { wait_for_loading(); if (!desc_valid()) desc_update(); }
 	void desc_update();
@@ -134,8 +134,8 @@ struct resptrcode_texture : public resptr_base<CTexture>
 {
 	void create(LPCSTR _name);
 	void destroy() { _set(NULL); }
-	shared_str bump_get() { while (_get() && _get()->flags.bLoading) { SwitchToThread(); }return _get()->m_bumpmap; }
-	bool bump_exist() { while (_get() && _get()->flags.bLoading) { SwitchToThread(); }return 0!=bump_get().size(); }
+	shared_str bump_get() { xrSpinWait w; while (_get() && _get()->flags.bLoading) { w(); }return _get()->m_bumpmap; }
+	bool bump_exist() { xrSpinWait w; while (_get() && _get()->flags.bLoading) { w(); }return 0!=bump_get().size(); }
 };
 
 typedef resptr_core<CTexture, resptrcode_texture>

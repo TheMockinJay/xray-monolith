@@ -138,18 +138,29 @@ class XRCORE_API xrSpinWait
     u32 current_count = 0;
 
 public:
-    xrSpinWait(u32 spin_count = 16) : spin_count(spin_count) {};
+    xrSpinWait(u32 spin_count = 64) : spin_count(spin_count) {}
+
     ICF void operator()()
     {
-        // Phase 1: Spin briefly (fast reaction if it finishes instantly)
-        if (current_count < spin_count)
+        if (current_count < 16)
         {
             _mm_pause();
             current_count++;
         }
-        // Phase 2: Yield CPU (don't burn 100% CPU waiting for a heavy update)
+        else if (current_count < spin_count)
+        {
+            _mm_pause();
+            _mm_pause();
+            _mm_pause();
+            _mm_pause();
+            current_count++;
+        }
         else
+        {
+            _mm_pause();
             std::this_thread::yield();
+            current_count++;
+        }
     }
 
     ICF void reset()

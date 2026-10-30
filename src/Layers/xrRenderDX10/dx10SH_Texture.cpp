@@ -68,10 +68,7 @@ CTexture::~CTexture()
 
 void CTexture::surface_set(ID3DBaseTexture* surf)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 
 	if (cName.size() && strstr(cName.c_str(), "$user$"))
 		flags.bUser = true;
@@ -139,10 +136,7 @@ void CTexture::surface_set(ID3DBaseTexture* surf)
 
 ID3DBaseTexture* CTexture::surface_get()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (flags.bLoadedAsStaging)
 		ProcessStaging();
 
@@ -290,10 +284,7 @@ void CTexture::ProcessStaging()
 
 void CTexture::Apply(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	dwLastUsedFrame = RDEVICE.dwFrame;
 
 	if (flags.bLoadedAsStaging)
@@ -342,10 +333,7 @@ void CTexture::Apply(u32 dwStage)
 
 void CTexture::apply_theora(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (pTheora->Update(m_play_time != 0xFFFFFFFF ? m_play_time : Device.dwTimeContinual))
 	{
 		D3D_RESOURCE_DIMENSION type;
@@ -385,10 +373,7 @@ void CTexture::apply_theora(u32 dwStage)
 
 void CTexture::apply_avi(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (pAVI->NeedUpdate())
 	{
 		D3D_RESOURCE_DIMENSION type;
@@ -421,10 +406,7 @@ void CTexture::apply_avi(u32 dwStage)
 
 void CTexture::apply_seq(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	// SEQ
 	u32 frame = Device.dwTimeContinual / seqMSPF; //Device.dwTimeGlobal
 	u32 frame_data = seqDATA.size();
@@ -447,10 +429,7 @@ void CTexture::apply_seq(u32 dwStage)
 
 void CTexture::apply_gif(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (gifPlayer->UpdateFrame())
 	{
         const CGIFAnimationPlayer::Frame* const gifFrame = gifPlayer->GetActiveFrame();
@@ -464,10 +443,7 @@ void CTexture::apply_gif(u32 dwStage)
 
 void CTexture::apply_normal(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	//CHK_DX(HW.pDevice->SetTexture(dwStage,pSurface));
 	Apply(dwStage);
 };
@@ -731,10 +707,7 @@ void CTexture::Load()
 
 void CTexture::Unload()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 
 	// Already unloaded or never loaded: nothing to do.
 	if (!flags.bLoaded)
@@ -782,10 +755,7 @@ void CTexture::Unload()
 
 void CTexture::desc_update()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	desc_cache = pSurface;
 	if (pSurface)
 	{
@@ -846,36 +816,24 @@ D3D_USAGE CTexture::GetUsage()
 
 void CTexture::video_Play(BOOL looped, u32 _time)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (pTheora) pTheora->Play(looped, (_time != 0xFFFFFFFF) ? (m_play_time = _time) : Device.dwTimeContinual);
 }
 
 void CTexture::video_Pause(BOOL state)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (pTheora) pTheora->Pause(state);
 }
 
 void CTexture::video_Stop()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (pTheora) pTheora->Stop();
 }
 
 BOOL CTexture::video_IsPlaying()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait w; while (flags.bLoading) { w(); }
 	return (pTheora) ? pTheora->IsPlaying() : FALSE;
 }
