@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #pragma hdrstop
+#include <tbb/scalable_allocator.h>
+#include <malloc.h>
 
 #include "xrsharedmem.h"
 #include "xrMemory_pure.h"
@@ -148,32 +150,11 @@ void xrMemory::_destroy()
 
 void xrMemory::mem_compact()
 {
-	PROF_EVENT("mem_compact");
-
-	// smem_container::clean() only frees blocks whose refcount has already reached
-	// zero, and it is reached from nowhere else: with the whole body behind
-	// DEBUG_MEMORY_MANAGER - which xrMemory.h never defines, see "#if 0//def DEBUG"
-	// - it only ever ran from ~smem_container at process exit. Every animation key
-	// block orphaned by a discarded motions_value stayed resident for the session.
-	//
-	// mem_compact() is called at load boundaries (Device_create/destroy, ai_space,
-	// alife_update_manager, end of precache), not per frame.
-	//
-	// NOTE: g_pStringContainer->clean() is deliberately NOT restored here. Unlike
-	// the stock implementation, this fork's str_container::clean() frees every
-	// storage block unconditionally, without consulting reference counts - it is a
-	// teardown path, and calling it mid-session would dangle every live shared_str.
-	if (g_pSharedMemoryContainer) g_pSharedMemoryContainer->clean();
-
-#ifdef DEBUG_MEMORY_MANAGER
-	// left debug-only: both stall for long enough to be visible
-	RegFlushKey(HKEY_CLASSES_ROOT);
-	RegFlushKey(HKEY_CURRENT_USER);
-	if (g_allow_heap_min)
-		_heapmin();
+	if (g_pSharedMemoryContainer)
+		g_pSharedMemoryContainer->clean();
+	scalable_allocation_command(TBBMALLOC_CLEAN_ALL_BUFFERS, nullptr);
 	HeapCompact(GetProcessHeap(), 0);
-	if (g_pStringContainer) g_pStringContainer->clean();
-#endif
+	_heapmin();
 }
 
 #ifdef DEBUG_MEMORY_MANAGER
