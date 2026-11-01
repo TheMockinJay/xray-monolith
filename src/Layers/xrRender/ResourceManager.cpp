@@ -5,6 +5,13 @@
 #include "stdafx.h"
 #include "xrRender_console.h"
 #pragma hdrstop
+#include <psapi.h>
+#include <dxgi1_3.h>
+#include <dxgi1_4.h>
+#include <atomic>
+extern xr_background_task_group textures_load_tasks;
+extern std::atomic<u32> g_native_dds_loaded;
+extern std::atomic<u32> g_fallback_dds_loaded;
 
 #pragma warning(disable:4995)
 #include <d3dx9.h>
@@ -409,34 +416,106 @@ void CResourceManager::DeferredUpload()
 {
 	if (!RDEVICE.b_is_Ready) return;
 
-	Msg("CResourceManager::DeferredUpload -> START, size = %d", m_textures.size());
+	textures_load_tasks.wait();
 
-	CTimer timer;
-	timer.Start();
+	PROCESS_MEMORY_COUNTERS_EX pmc_pre = {}, pmc_post = {}, pmc_trim = {}, pmc_comp = {};
+	pmc_pre.cb = sizeof(pmc_pre);
+	pmc_post.cb = sizeof(pmc_post);
+	pmc_trim.cb = sizeof(pmc_trim);
+	pmc_comp.cb = sizeof(pmc_comp);
+	K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc_pre, sizeof(pmc_pre));
 
-	// Snapshot the pointers under creationGuard so this walk doesn't run
-	// concurrently with _CreateTexture's insert into the same std::map, then
-	// release the lock before running Load() across PPL worker threads (some
-	// of which may themselves need creationGuard, e.g. via _CreateTexture).
-	xr_vector<ref_texture> textures;
+	g_native_dds_loaded.store(0, std::memory_order_relaxed);
+	g_fallback_dds_loaded.store(0, std::memory_order_relaxed);
+
+	const bool inLevel = (g_pGameLevel != nullptr);
+	xr_vector<ref_texture> textures_to_load;
+	u32 skipped_dormant = 0;
 	{
 		xrCriticalSectionGuard guard(creationGuard);
-		textures.reserve(m_textures.size());
+		textures_to_load.reserve(m_textures.size());
 		for (auto& pair : m_textures)
-        {
-            ref_texture texture = AcquireTexture(pair.second);
-            if (texture) textures.push_back(texture);
-        }
+		{
+			CTexture* T = pair.second;
+			if (!T || T->flags.bLoaded)
+				continue;
+			LPCSTR name = pair.first;
+			const bool isCoreUI = (strncmp(name, "ui\\", 3) == 0) ||
+			                      (strncmp(name, "ui/", 3) == 0) ||
+			                      (strncmp(name, "ed\\", 3) == 0) ||
+			                      (strstr(name, "$") != nullptr);
+			if (!inLevel)
+			{
+				if (isCoreUI)
+				{
+					ref_texture tex = AcquireTexture(T);
+					if (tex) textures_to_load.push_back(tex);
+				}
+				else
+					skipped_dormant++;
+			}
+			else
+			{
+				if (strncmp(name, "sky\\", 4) == 0 || strncmp(name, "sky/", 4) == 0)
+				{
+					skipped_dormant++;
+					continue;
+				}
+				const bool isSkyOrEnv = (strncmp(name, "fx\\", 3) == 0) ||
+				                        (strncmp(name, "intro\\", 6) == 0);
+				const bool isLevelActive = isCoreUI ||
+				                           isSkyOrEnv ||
+				                           (T->dwLastUsedFrame != 0);
+				if (isLevelActive)
+				{
+					ref_texture tex = AcquireTexture(T);
+					if (tex) textures_to_load.push_back(tex);
+				}
+				else
+					skipped_dormant++;
+			}
+		}
 	}
 
-	const DWORD owner_thread = GetCurrentThreadId();
-	xr_parallel_foreach(textures.begin(), textures.end(), [owner_thread](const ref_texture& texture)
-	{
-        if (owner_thread != GetCurrentThreadId()) { PROF_THREAD("X-Ray PPL Thread") }
-		texture->Load();
+	tbb::task_arena upload_arena(6);
+	upload_arena.execute([&] {
+		xr_parallel_foreach(textures_to_load.begin(), textures_to_load.end(), [&](const ref_texture& texture)
+		{
+			texture->Load();
+		});
 	});
+	textures_load_tasks.wait();
 
-	Msg("texture loading time: %d", timer.GetElapsed_ms());
+	K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc_post, sizeof(pmc_post));
+
+#ifdef USE_DX11
+	if (HW.pContext)
+		HW.pContext->Flush();
+	IDXGIDevice3* pDXGIDevice3 = nullptr;
+	if (HW.pDevice && SUCCEEDED(HW.pDevice->QueryInterface(__uuidof(IDXGIDevice3), (void**)&pDXGIDevice3)) && pDXGIDevice3)
+	{
+		pDXGIDevice3->Trim();
+		pDXGIDevice3->Release();
+	}
+#endif
+
+	K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc_trim, sizeof(pmc_trim));
+	Memory.mem_compact();
+	K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc_comp, sizeof(pmc_comp));
+
+	const s64 pre_mb  = s64(pmc_pre.PrivateUsage) / (1024 * 1024);
+	const s64 post_mb = s64(pmc_post.PrivateUsage) / (1024 * 1024);
+	const s64 trim_mb = s64(pmc_trim.PrivateUsage) / (1024 * 1024);
+	const s64 comp_mb = s64(pmc_comp.PrivateUsage) / (1024 * 1024);
+	const s64 ws_mb   = s64(pmc_comp.WorkingSetSize) / (1024 * 1024);
+
+	Msg("* [DeferredUpload]: InLevel[%d] | Queued[%zu] | SkippedDormant[%u] | NativeZeroCopy[%u] | Fallback[%u] | Private: %lld MB -> %lld MB (Upload %+lld MB) -> DXGITrim: %lld MB (%+lld MB) -> Compact: %lld MB (%+lld MB) | WorkingSet: %lld MB",
+		inLevel ? 1 : 0,
+		textures_to_load.size(),
+		skipped_dormant,
+		g_native_dds_loaded.load(std::memory_order_relaxed),
+		g_fallback_dds_loaded.load(std::memory_order_relaxed),
+		pre_mb, post_mb, (post_mb - pre_mb), trim_mb, (trim_mb - post_mb), comp_mb, (comp_mb - trim_mb), ws_mb);
 }
 
 void CResourceManager::DeferredUnload()
@@ -465,35 +544,33 @@ void CResourceManager::UnloadAllTexturesOnLevelUnload()
 {
 	if (!RDEVICE.b_is_Ready)
 		return;
+	textures_load_tasks.wait();
 
-    xrCriticalSectionGuard guard(creationGuard);
+	xrCriticalSectionGuard guard(creationGuard);
 
-    xr_vector<CTexture*> textures_to_unload;
-    textures_to_unload.reserve(m_textures.size());
+	xr_vector<CTexture*> textures_to_unload;
+	textures_to_unload.reserve(m_textures.size());
 
-    for (const auto& pair : m_textures)
-    {
-        CTexture* texture = pair.second;
-        if (!texture)
-            continue;
+	for (const auto& pair : m_textures)
+	{
+		CTexture* texture = pair.second;
+		if (!texture)
+			continue;
+		if (texture->flags.bUser)
+			continue;
+		if (strstr(*texture->cName, "$"))
+			continue;
+		LPCSTR name = pair.first;
+		if (strncmp(name, "ui\\", 3) == 0 || strncmp(name, "ui/", 3) == 0)
+			continue;
+		textures_to_unload.push_back(texture);
+	}
 
-        if (texture->flags.bUser)
-            continue;
-
-        // Keep $ textures alive since they are bound to runtime render targets or other important parts
-        if (strstr(*texture->cName, "$"))
-            continue;
-
-        // Keep UI textures
-        LPCSTR name = pair.first;
-        if (strncmp(name, "ui\\", 3) == 0 || strncmp(name, "ui/", 3) == 0)
-            continue;
-
-        textures_to_unload.push_back(texture);
-    }
-
-    for (CTexture* texture : textures_to_unload)
-        texture->Unload();
+	for (CTexture* texture : textures_to_unload)
+	{
+		texture->dwLastUsedFrame = 0;
+		texture->Unload();
+	}
 }
 
 #ifdef _EDITOR
@@ -536,27 +613,96 @@ Shader* CResourceManager::_CreateShader(Shader* InShader)
 	return N;
 }
 
-void CResourceManager::_GetMemoryUsage(u32& m_base, u32& c_base, u32& m_lmaps, u32& c_lmaps)
+void CResourceManager::_GetMemoryUsage(u64& m_base, u32& c_base, u64& m_lmaps, u32& c_lmaps)
 {
-    xrCriticalSectionGuard guard(creationGuard);
+	xrCriticalSectionGuard guard(creationGuard);
 	m_base = c_base = m_lmaps = c_lmaps = 0;
+	u64 m_sky = 0, m_ui = 0, m_pfx = 0, m_trees = 0, m_world = 0;
+	u32 c_loaded = 0, c_dormant = 0;
 
 	map_Texture::iterator I = m_textures.begin();
 	map_Texture::iterator E = m_textures.end();
-	for (; I != E; I++)
+	for (; I != E; ++I)
 	{
-		u32 m = I->second->flags.MemoryUsage;
-		if (strstr(I->first, "lmap"))
+		LPCSTR name = I->first;
+		CTexture* T = I->second;
+		if (!T) continue;
+		const u64 m = T->flags.bLoaded ? T->flags.MemoryUsage : 0;
+		if (T->flags.bLoaded) c_loaded++; else c_dormant++;
+
+		if (strstr(name, "lmap"))
 		{
-			c_lmaps ++;
+			c_lmaps++;
 			m_lmaps += m;
 		}
 		else
 		{
-			c_base ++;
+			c_base++;
 			m_base += m;
+			if (strncmp(name, "sky\\", 4) == 0 || strncmp(name, "sky/", 4) == 0)
+				m_sky += m;
+			else if (strncmp(name, "ui\\", 3) == 0 || strncmp(name, "ui/", 3) == 0 || strncmp(name, "intro\\", 6) == 0 || strncmp(name, "ed\\", 3) == 0)
+				m_ui += m;
+			else if (strncmp(name, "pfx\\", 4) == 0 || strncmp(name, "fx\\", 3) == 0 || strncmp(name, "semitone\\", 9) == 0 || strncmp(name, "jdude\\", 6) == 0 || strncmp(name, "wm\\", 3) == 0)
+				m_pfx += m;
+			else if (strncmp(name, "trees\\", 6) == 0 || strncmp(name, "lfo\\", 4) == 0 || strncmp(name, "detail\\", 7) == 0 || strncmp(name, "terrain\\", 8) == 0)
+				m_trees += m;
+			else
+				m_world += m;
 		}
 	}
+
+	u64 vram_local_mb = 0, vram_local_budget_mb = 0, vram_shared_mb = 0;
+#ifdef USE_DX11
+	if (HW.pContext)
+		HW.pContext->Flush();
+	IDXGIDevice3* pDXGIDevice3 = nullptr;
+	if (HW.pDevice && SUCCEEDED(HW.pDevice->QueryInterface(__uuidof(IDXGIDevice3), (void**)&pDXGIDevice3)) && pDXGIDevice3)
+	{
+		pDXGIDevice3->Trim();
+		pDXGIDevice3->Release();
+	}
+	IDXGIDevice* pDXGIDev = nullptr;
+	if (HW.pDevice && SUCCEEDED(HW.pDevice->QueryInterface(__uuidof(IDXGIDevice), (void**)&pDXGIDev)) && pDXGIDev)
+	{
+		IDXGIAdapter* pAdapter = nullptr;
+		if (SUCCEEDED(pDXGIDev->GetAdapter(&pAdapter)) && pAdapter)
+		{
+			IDXGIAdapter3* pAdapter3 = nullptr;
+			if (SUCCEEDED(pAdapter->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&pAdapter3)) && pAdapter3)
+			{
+				DXGI_QUERY_VIDEO_MEMORY_INFO infoLocal = {}, infoShared = {};
+				if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &infoLocal)))
+				{
+					vram_local_mb = infoLocal.CurrentUsage / (1024 * 1024);
+					vram_local_budget_mb = infoLocal.Budget / (1024 * 1024);
+				}
+				if (SUCCEEDED(pAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &infoShared)))
+				{
+					vram_shared_mb = infoShared.CurrentUsage / (1024 * 1024);
+				}
+				pAdapter3->Release();
+			}
+			pAdapter->Release();
+		}
+		pDXGIDev->Release();
+	}
+#endif
+
+	Msg("* [ D3D 64-bit ]: loaded_tex[%u] | dormant_tex[%u] | total_true[%llu MB] (World/NPC/Wpn[%llu MB], Trees/Terrain[%llu MB], Particles/FX[%llu MB], Sky[%llu MB], UI[%llu MB], Lightmaps[%llu MB])",
+		c_loaded, c_dormant,
+		(m_base + m_lmaps) / (1024 * 1024),
+		m_world / (1024 * 1024),
+		m_trees / (1024 * 1024),
+		m_pfx / (1024 * 1024),
+		m_sky / (1024 * 1024),
+		m_ui / (1024 * 1024),
+		m_lmaps / (1024 * 1024)
+	);
+	Msg("* [ DXGI VRAM  ]: Dedicated_VRAM_Used[%llu MB / Budget %llu MB] | Shared_System_GPU_Used[%llu MB] | RTargets[%zu] | VS[%zu] | PS[%zu]",
+		vram_local_mb, vram_local_budget_mb, vram_shared_mb,
+		m_rtargets.size(), m_vs.size(), m_ps.size()
+	);
 }
 
 void CResourceManager::_DumpMemoryUsage()

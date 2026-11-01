@@ -48,7 +48,8 @@ CTexture::CTexture()
 	ZeroMemory(&desc, sizeof(desc));
 	seqMSPF = 0;
 	flags.MemoryUsage = 0;
-	flags.bLoaded = false;
+	flags.bLoaded = FALSE;
+	flags.MemoryUsage = 0;
 	flags.bLoading = false;
 	flags.bUser = false;
 	flags.seqCycles = FALSE;
@@ -67,10 +68,7 @@ CTexture::~CTexture()
 
 void CTexture::surface_set(ID3DBaseTexture* surf)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 
 	if (cName.size() && strstr(cName.c_str(), "$user$"))
 		flags.bUser = true;
@@ -148,10 +146,9 @@ void CTexture::surface_set(ID3DBaseTexture* surf)
 
 ID3DBaseTexture* CTexture::surface_get()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	if (!flags.bLoaded && !flags.bUser)
+		Load();
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (flags.bLoadedAsStaging)
 		ProcessStaging();
 
@@ -170,47 +167,15 @@ void CTexture::PostLoad()
 
 void CTexture::apply_load(u32 dwStage)
 {
-    if (!flags.bLoaded)
-    {
-        // Never loaded, or just dropped by EvictStalledTextures(). Load() ends up in
-        // D3DX11CreateTextureFromMemory, which races the resource thread if run inline
-        // here (this can run on the render thread mid-gameplay just as easily as on a
-        // loading-screen thread during level load - neither is safe in the MT build).
-        // Queue the (re)load the same way _CreateTexture() does for new textures instead;
-        // bLoading guards against re-queuing every call while that's in flight.
-        if (!flags.bLoading)
-        {
-#ifdef DEBUG
-            Msg("* [TexReload] queued: %s", cName.c_str());
-#endif // DEBUG
-            ref_texture self(this);
-            const DWORD owner_thread = GetCurrentThreadId();
-            textures_load_tasks.run([self, owner_thread]()
-            {
-                if (owner_thread != GetCurrentThreadId()) { PROF_THREAD("X-Ray PPL Thread") }
-                self->Load();
-            });
-        }
-        // Bind nothing (or whatever is already there, e.g. mid-flight from an
-        // in-flight Load()) for this call. apply_normal() waits out any in-flight
-        // load, so this never touches D3D resources that are being created
-        // concurrently. Once the queued Load() completes, PostLoad() re-points
-        // `bind` at the real apply_* handler and subsequent calls stop landing here.
-        apply_normal(dwStage);
-        return;
-    }
-
-    PostLoad();
-    if (bind == xr_make_delegate(this, &CTexture::apply_load))
-    {
-        // This should not happen - if bind is still apply_load, fall back to apply_normal
-        // which will just apply the (potentially unloaded) surface
-        apply_normal(dwStage);
-    }
-    else
-    {
-        bind(dwStage);
-    }
+	if (!flags.bLoaded)
+		Load();
+	if (flags.bLoadedAsStaging)
+		ProcessStaging();
+	PostLoad();
+	if (bind != xr_make_delegate(this, &CTexture::apply_load))
+		bind(dwStage);
+	else
+		apply_normal(dwStage);
 };
 
 void CTexture::ProcessStaging()
@@ -298,10 +263,7 @@ void CTexture::ProcessStaging()
 
 void CTexture::Apply(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	dwLastUsedFrame = RDEVICE.dwFrame;
 
 	if (flags.bLoadedAsStaging)
@@ -355,10 +317,7 @@ void CTexture::Apply(u32 dwStage)
 
 void CTexture::apply_theora(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (pTheora->Update(m_play_time != 0xFFFFFFFF ? m_play_time : Device.dwTimeContinual))
 	{
 		D3D_RESOURCE_DIMENSION type;
@@ -398,10 +357,7 @@ void CTexture::apply_theora(u32 dwStage)
 
 void CTexture::apply_avi(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (pAVI->NeedUpdate())
 	{
 		D3D_RESOURCE_DIMENSION type;
@@ -434,10 +390,7 @@ void CTexture::apply_avi(u32 dwStage)
 
 void CTexture::apply_seq(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	// SEQ
 	u32 frame = Device.dwTimeContinual / seqMSPF; //Device.dwTimeGlobal
 	u32 frame_data = seqDATA.size();
@@ -460,10 +413,7 @@ void CTexture::apply_seq(u32 dwStage)
 
 void CTexture::apply_gif(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (gifPlayer->UpdateFrame())
 	{
         const CGIFAnimationPlayer::Frame* const gifFrame = gifPlayer->GetActiveFrame();
@@ -477,10 +427,7 @@ void CTexture::apply_gif(u32 dwStage)
 
 void CTexture::apply_normal(u32 dwStage)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	//CHK_DX(HW.pDevice->SetTexture(dwStage,pSurface));
 	Apply(dwStage);
 };
@@ -498,9 +445,14 @@ void CTexture::Load()
 {
 	PROF_EVENT("CTexture::Load");
 
-	if (flags.bLoaded || flags.bLoading) return;
-	flags.bLoading = true;
-	flags.bLoaded = false;
+	static xrCriticalSection s_tex_load_cs;
+	{
+		xrCriticalSectionGuard guard(s_tex_load_cs);
+		if (flags.bLoaded || flags.bLoading) return;
+		flags.bLoading = true;
+	}
+	flags.bLoaded = FALSE;
+	flags.MemoryUsage = 0;
 	desc_cache = 0;
 	if (pSurface)
 	{
@@ -720,10 +672,7 @@ void CTexture::Load()
 
 void CTexture::Unload()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 
 	// Already unloaded or never loaded: nothing to do.
 	if (!flags.bLoaded)
@@ -736,6 +685,7 @@ void CTexture::Unload()
 	//.	if (flags.bLoaded)		Msg		("* Unloaded: %s",cName.c_str());
 
 	flags.bLoaded = FALSE;
+	flags.MemoryUsage = 0;
 	flags.bLoadedAsStaging = FALSE;
 	if (!seqDATA.empty())
 	{
@@ -771,10 +721,7 @@ void CTexture::Unload()
 
 void CTexture::desc_update()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	desc_cache = pSurface;
 	if (pSurface)
 	{
@@ -835,36 +782,24 @@ D3D_USAGE CTexture::GetUsage()
 
 void CTexture::video_Play(BOOL looped, u32 _time)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (pTheora) pTheora->Play(looped, (_time != 0xFFFFFFFF) ? (m_play_time = _time) : Device.dwTimeContinual);
 }
 
 void CTexture::video_Pause(BOOL state)
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (pTheora) pTheora->Pause(state);
 }
 
 void CTexture::video_Stop()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	if (pTheora) pTheora->Stop();
 }
 
 BOOL CTexture::video_IsPlaying()
 {
-	while (flags.bLoading)
-	{
-		SwitchToThread();
-	}
+	xrSpinWait spin_wait; while (flags.bLoading) { spin_wait(); }
 	return (pTheora) ? pTheora->IsPlaying() : FALSE;
 }

@@ -624,40 +624,40 @@ xr_background_task_group textures_load_tasks;
 ref_texture CResourceManager::_CreateTexture(LPCSTR _Name)
 {
 	PROF_EVENT("_CreateTexture");
-	// DBG_VerifyTextures	();
 	if (0 == xr_strcmp(_Name, "null")) return 0;
-	//Msg("texture %s", _Name);
 	R_ASSERT(_Name && _Name[0]);
 	string_path Name;
-	xr_strcpy(Name, _Name); //. andy if (strext(Name)) *strext(Name)=0;
+	xr_strcpy(Name, _Name);
 	xrCriticalSectionGuard guard(creationGuard);
 	fix_texture_name(Name);
-	// ***** first pass - search already loaded texture
 	LPSTR N = LPSTR(Name);
 	map_TextureIt I = m_textures.find(N);
 	if (I != m_textures.end())
-    {
-        ref_texture existing = AcquireTexture(I->second);
-        if (existing) return existing;
-        // Last release has begun destruction. Never resurrect the object.
-        I->second->dwFlags &= ~xr_resource_flagged::RF_REGISTERED;
-        m_textures.erase(I);
-    }
+	{
+		ref_texture existing = AcquireTexture(I->second);
+		if (existing)
+		{
+			if (bDeferredLoad && g_pGameLevel != nullptr)
+				existing->dwLastUsedFrame = 1;
+			return existing;
+		}
+		I->second->dwFlags &= ~xr_resource_flagged::RF_REGISTERED;
+		m_textures.erase(I);
+	}
 
 	{
 		CTexture* T = xr_new<CTexture>();
-        ref_texture texture(T);
+		ref_texture texture(T);
 		T->dwFlags |= xr_resource_flagged::RF_REGISTERED;
+		T->dwLastUsedFrame = (bDeferredLoad && g_pGameLevel != nullptr) ? 1 : 0;
 		m_textures.insert(mk_pair(T->set_name(Name), T));
-		T->Preload();
-		if (Device.b_is_Ready)
+		const bool isMenuOrIntro = (strncmp(Name, "ui\\", 3) == 0) ||
+		                           (strncmp(Name, "ui/", 3) == 0) ||
+		                           (strncmp(Name, "intro\\", 6) == 0) ||
+		                           (strncmp(Name, "ed\\", 3) == 0);
+		if (Device.b_is_Ready && !bDeferredLoad && isMenuOrIntro)
 		{
-            const DWORD owner_thread = GetCurrentThreadId();
-            textures_load_tasks.run([texture, owner_thread]()
-            {
-                if (owner_thread != GetCurrentThreadId()) { PROF_THREAD("X-Ray PPL Thread") }
-                texture->Load();
-            });
+			T->Load();
 		}
 		return texture;
 	}
