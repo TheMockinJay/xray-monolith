@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #pragma hdrstop
+#include <tbb/scalable_allocator.h>
+#include <malloc.h>
 
 #include "xrsharedmem.h"
 #include "xrMemory_pure.h"
@@ -148,16 +150,11 @@ void xrMemory::_destroy()
 
 void xrMemory::mem_compact()
 {
-	PROF_EVENT("mem_compact");
-#ifdef DEBUG_MEMORY_MANAGER
-	RegFlushKey(HKEY_CLASSES_ROOT);
-	RegFlushKey(HKEY_CURRENT_USER);
-	if (g_allow_heap_min)
-		_heapmin();
+	if (g_pSharedMemoryContainer)
+		g_pSharedMemoryContainer->clean();
+	scalable_allocation_command(TBBMALLOC_CLEAN_ALL_BUFFERS, nullptr);
 	HeapCompact(GetProcessHeap(), 0);
-	if (g_pStringContainer) g_pStringContainer->clean();
-	if (g_pSharedMemoryContainer) g_pSharedMemoryContainer->clean();
-#endif
+	_heapmin();
 }
 
 #ifdef DEBUG_MEMORY_MANAGER

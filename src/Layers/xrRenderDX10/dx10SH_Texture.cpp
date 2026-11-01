@@ -136,6 +136,8 @@ void CTexture::surface_set(ID3DBaseTexture* surf)
 
 ID3DBaseTexture* CTexture::surface_get()
 {
+	if (!flags.bLoaded && !flags.bUser)
+		Load();
 	xrSpinWait w; while (flags.bLoading) { w(); }
 	if (flags.bLoadedAsStaging)
 		ProcessStaging();
@@ -155,48 +157,15 @@ void CTexture::PostLoad()
 
 void CTexture::apply_load(u32 dwStage)
 {
-    if (!flags.bLoaded)
-    {
-        // Never loaded, or just dropped by EvictStalledTextures(). Load() ends up in
-        // D3DX11CreateTextureFromMemory, which races the resource thread if run inline
-        // here (this can run on the render thread mid-gameplay just as easily as on a
-        // loading-screen thread during level load - neither is safe in the MT build).
-        // Queue the (re)load the same way _CreateTexture() does for new textures instead;
-        // bLoading guards against re-queuing every call while that's in flight.
-        if (!flags.bLoading)
-        {
-#ifdef DEBUG
-            Msg("* [TexReload] queued: %s", cName.c_str());
-#endif // DEBUG
-            CTexture* self = this;
-            static DWORD this_thread_id = 0;
-            this_thread_id = GetCurrentThreadId();
-            textures_load_tasks.run([self]()
-            {
-                if (this_thread_id != GetCurrentThreadId()) { PROF_THREAD("X-Ray PPL Thread") }
-                self->Load();
-            });
-        }
-        // Bind nothing (or whatever is already there, e.g. mid-flight from an
-        // in-flight Load()) for this call. apply_normal() waits out any in-flight
-        // load, so this never touches D3D resources that are being created
-        // concurrently. Once the queued Load() completes, PostLoad() re-points
-        // `bind` at the real apply_* handler and subsequent calls stop landing here.
-        apply_normal(dwStage);
-        return;
-    }
-
-    PostLoad();
-    if (bind == xr_make_delegate(this, &CTexture::apply_load))
-    {
-        // This should not happen - if bind is still apply_load, fall back to apply_normal
-        // which will just apply the (potentially unloaded) surface
-        apply_normal(dwStage);
-    }
-    else
-    {
-        bind(dwStage);
-    }
+if (!flags.bLoaded)
+Load();
+if (flags.bLoadedAsStaging)
+ProcessStaging();
+PostLoad();
+if (bind != fastdelegate::FastDelegate1<u32>(this, &CTexture::apply_load))
+bind(dwStage);
+else
+apply_normal(dwStage);
 };
 
 void CTexture::ProcessStaging()
@@ -462,7 +431,13 @@ void CTexture::Load()
 	PROF_EVENT("CTexture::Load");
 
 	if (flags.bLoaded || flags.bLoading) return;
-	flags.bLoading = true;
+	static xrCriticalSection s_tex_load_cs;
+	{
+		xrCriticalSectionGuard guard(s_tex_load_cs);
+		if (flags.bLoaded || flags.bLoading)
+			return;
+		flags.bLoading = true;
+	}
 	flags.bLoaded = false;
 	desc_cache = 0;
 	if (pSurface)
@@ -720,6 +695,7 @@ void CTexture::Unload()
 	//.	if (flags.bLoaded)		Msg		("* Unloaded: %s",cName.c_str());
 
 	flags.bLoaded = FALSE;
+	flags.MemoryUsage = 0;
 	flags.bLoadedAsStaging = FALSE;
 	if (!seqDATA.empty())
 	{

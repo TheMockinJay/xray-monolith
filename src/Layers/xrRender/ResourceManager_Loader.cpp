@@ -154,6 +154,7 @@ void CResourceManager::OnDeviceCreate(LPCSTR shName)
 
 void CResourceManager::StoreNecessaryTextures()
 {
+	return;
 	if (!m_necessary.empty())
 		return;
 
