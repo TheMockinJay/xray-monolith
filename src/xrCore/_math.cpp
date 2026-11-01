@@ -2,8 +2,8 @@
 #pragma hdrstop
 
 #include <process.h>
+#include <intrin.h>
 
-// mmsystem.h
 #define MMNOSOUND
 #define MMNOMIDI
 #define MMNOAUX
@@ -12,8 +12,8 @@
 #include <mmsystem.h>
 
 #include "profiler.h"
+#include "cpuid.h"
 
-// Initialized on startup
 XRCORE_API Fmatrix Fidentity;
 XRCORE_API Dmatrix Didentity;
 XRCORE_API CRandom Random;
@@ -23,45 +23,23 @@ u16 getFPUsw() { return 0; }
 
 namespace FPU
 {
-	XRCORE_API void m24(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_CHOP, MCW_RC);
-	}
+XRCORE_API void m24(void) {}
+XRCORE_API void m24r(void) {}
+XRCORE_API void m53(void) {}
+XRCORE_API void m53r(void) {}
+XRCORE_API void m64(void) {}
+XRCORE_API void m64r(void) {}
 
-	XRCORE_API void m24r(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_NEAR, MCW_RC);
-	}
-
-	XRCORE_API void m53(void)
-	{
-		_control87(_PC_53, MCW_PC);
-		_control87(_RC_CHOP, MCW_RC);
-	}
-
-	XRCORE_API void m53r(void)
-	{
-		_control87(_PC_53, MCW_PC);
-		_control87(_RC_NEAR, MCW_RC);
-	}
-
-	XRCORE_API void m64(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_CHOP, MCW_RC);
-	}
-
-	XRCORE_API void m64r(void)
-	{
-		_control87(_PC_64, MCW_PC);
-		_control87(_RC_NEAR, MCW_RC);
-	}
-
-	void initialize()
-	{
-	}
+void initialize()
+{
+u64 entropy = __rdtsc();
+entropy ^= u64(GetCurrentProcessId()) << 32;
+entropy ^= u64(GetCurrentThreadId()) << 16;
+entropy ^= entropy >> 33;
+entropy *= 0xff51afd7ed558ccdULL;
+entropy ^= entropy >> 33;
+::Random.seed(u32(entropy));
+}
 };
 #else
 u16 getFPUsw()
@@ -117,27 +95,25 @@ void initialize()
 
     _control87(_PC_64, MCW_PC);
     _control87(_RC_CHOP, MCW_RC);
-    _24 = getFPUsw(); // 24, chop
+    _24 = getFPUsw();
     _control87(_RC_NEAR, MCW_RC);
-    _24r = getFPUsw(); // 24, rounding
+    _24r = getFPUsw();
 
     _control87(_PC_53, MCW_PC);
     _control87(_RC_CHOP, MCW_RC);
-    _53 = getFPUsw(); // 53, chop
+    _53 = getFPUsw();
     _control87(_RC_NEAR, MCW_RC);
-    _53r = getFPUsw(); // 53, rounding
+    _53r = getFPUsw();
 
     _control87(_PC_64, MCW_PC);
     _control87(_RC_CHOP, MCW_RC);
-    _64 = getFPUsw(); // 64, chop
+    _64 = getFPUsw();
     _control87(_RC_NEAR, MCW_RC);
-    _64r = getFPUsw(); // 64, rounding
+    _64r = getFPUsw();
 
 #ifndef XRCORE_STATIC
-
     m24r();
-
-#endif //XRCORE_STATIC
+#endif
 
     ::Random.seed(u32(CPU::GetCLK() % (1i64 << 32i64)));
 }
@@ -146,26 +122,55 @@ void initialize()
 
 namespace CPU
 {
-	XRCORE_API u64 clk_per_second;
-	XRCORE_API u64 clk_per_milisec;
-	XRCORE_API u64 clk_per_microsec;
-	XRCORE_API u64 clk_overhead;
-	XRCORE_API float clk_to_seconds;
-	XRCORE_API float clk_to_milisec;
-	XRCORE_API float clk_to_microsec;
-	XRCORE_API u64 qpc_freq = 0;
-	XRCORE_API u64 qpc_overhead = 0;
-	XRCORE_API u32 qpc_counter = 0;
+XRCORE_API bool bUseInvariantTSC = false;
+XRCORE_API u64 clk_per_second;
+XRCORE_API u64 clk_per_milisec;
+XRCORE_API u64 clk_per_microsec;
+XRCORE_API u64 clk_overhead;
+XRCORE_API float clk_to_seconds;
+XRCORE_API float clk_to_milisec;
+XRCORE_API float clk_to_microsec;
+alignas(64) XRCORE_API u64 qpc_freq = 0;
+XRCORE_API u64 qpc_overhead = 0;
+alignas(64) XRCORE_API u32 qpc_counter = 0;
 
-	XRCORE_API _processor_info ID;
+static u64 tsc_base = 0;
+static u64 qpc_base = 0;
+static u64 qpc_mul = 0;
+static double qpc_scale = 1.0;
 
-	XRCORE_API u64 QPC()
-	{
-		u64 _dest;
-		QueryPerformanceCounter((PLARGE_INTEGER)&_dest);
-		qpc_counter++;
-		return _dest;
-	}
+XRCORE_API _processor_info ID;
+
+XRCORE_API u64 QPC()
+{
+if (bUseInvariantTSC)
+{
+const u64 delta_tsc = __rdtsc() - tsc_base;
+u64 hi = 0;
+const u64 lo = _umul128(delta_tsc, qpc_mul, &hi);
+return qpc_base + ((hi << 32) | (lo >> 32));
+}
+u64 _dest;
+QueryPerformanceCounter((PLARGE_INTEGER)&_dest);
+return _dest;
+}
+
+XRCORE_API void TimerBenchmark()
+{
+constexpr u32 N = 1000000;
+LARGE_INTEGER s, e, f;
+QueryPerformanceFrequency(&f);
+QueryPerformanceCounter(&s);
+volatile u64 sink = 0;
+for (u32 i = 0; i < N; ++i)
+{
+sink += CPU::QPC();
+}
+QueryPerformanceCounter(&e);
+const double total_ms = double(e.QuadPart - s.QuadPart) * 1000.0 / double(f.QuadPart);
+const double ns_per_call = (total_ms * 1000000.0) / double(N);
+Msg("* [Timer] Benchmark (1,000,000 calls): %.3f ms total | %.2f ns/call (sink=%llu)", total_ms, ns_per_call, sink & 1ULL);
+}
 
 #ifdef M_BORLAND
 u64 __fastcall GetCLK(void)
@@ -177,121 +182,154 @@ u64 __fastcall GetCLK(void)
 
 void Detect()
 {
-	// 1. General CPU identification
-	if (!_cpuid(&ID))
-	{
-		abort();
-	}
+if (!_cpuid(&ID))
+{
+abort();
+}
 
-	// 2. Use QueryPerformanceFrequency as the stable frequency reference
-	// QPC is constant even if the CPU frequency boosts or throttles.
-	QueryPerformanceFrequency((PLARGE_INTEGER)&qpc_freq);
+LARGE_INTEGER qpc_f, qpc_s, qpc_e;
+QueryPerformanceFrequency(&qpc_f);
+qpc_freq = u64(qpc_f.QuadPart);
 
-	// 3. Detect clk_per_second (RDTSC Frequency)
-	// We time this for 100ms instead of 1000ms to avoid long startup hangs
-	// while still getting a very accurate calibration.
-	u64 start_qpc = QPC();
-	u64 start_clk = GetCLK();
+QueryPerformanceCounter(&qpc_s);
+u64 start_clk = GetCLK();
 
-	// Busy-wait for 100ms using QPC
-	u64 wait_ticks = qpc_freq / 10;
-	while (QPC() - start_qpc < wait_ticks);
+u64 wait_ticks = qpc_freq / 10;
+do
+{
+_mm_pause();
+QueryPerformanceCounter(&qpc_e);
+} while (u64(qpc_e.QuadPart - qpc_s.QuadPart) < wait_ticks);
 
-	u64 end_qpc = QPC();
-	u64 end_clk = GetCLK();
+u64 end_clk = GetCLK();
 
-	// Calculate cycles per second based on the stable QPC reference
-	double time_elapsed = double(end_qpc - start_qpc) / double(qpc_freq);
-	clk_per_second = u64(double(end_clk - start_clk) / time_elapsed);
+const u64 delta_qpc = u64(qpc_e.QuadPart - qpc_s.QuadPart);
+const u64 delta_tsc = end_clk - start_clk;
+double time_elapsed = double(delta_qpc) / double(qpc_freq);
+clk_per_second = u64(double(delta_tsc) / time_elapsed);
 
-	// 4. Detect RDTSC Overhead (Keep for compatibility)
-	// We do this without changing priority; modern CPUs have very stable RDTSC latencies.
-	clk_overhead = 0;
-	for (int i = 0; i < 256; i++)
-	{
-		u64 start = GetCLK();
-		clk_overhead += (GetCLK() - start);
-	}
-	clk_overhead /= 256;
+int cpui[4] = {0};
+__cpuid(cpui, 0);
+if (cpui[0] >= 0x15)
+{
+int leaf15[4] = {0};
+__cpuid(leaf15, 0x15);
+const u64 denom = u64(u32(leaf15[0]));
+const u64 numer = u64(u32(leaf15[1]));
+u64 crystal_hz = u64(u32(leaf15[2]));
+if (denom != 0 && numer != 0)
+{
+if (crystal_hz == 0 && strncmp(ID.v_name, "GenuineIntel", 12) == 0)
+{
+crystal_hz = 24000000ULL;
+}
+if (crystal_hz != 0)
+{
+const u64 leaf15_hz = (crystal_hz * numer) / denom;
+const u64 diff = (leaf15_hz > clk_per_second) ? (leaf15_hz - clk_per_second) : (clk_per_second - leaf15_hz);
+if (diff < (leaf15_hz / 50))
+{
+clk_per_second = leaf15_hz;
+}
+}
+}
+}
 
-	// 5. Detect QPC Overhead (Keep for compatibility)
-	qpc_overhead = 0;
-	for (int i = 0; i < 256; i++)
-	{
-		u64 start = QPC();
-		qpc_overhead += (QPC() - start);
-	}
-	qpc_overhead /= 256;
+tsc_base = end_clk;
+qpc_base = u64(qpc_e.QuadPart);
+qpc_scale = double(qpc_freq) / double(clk_per_second);
+qpc_mul = u64((double(qpc_freq) * 4294967296.0) / double(clk_per_second) + 0.5);
+bUseInvariantTSC = (ID.feature & _CPU_FEATURE_INVARIANT_TSC) != 0;
 
-	// 6. Calculate derived timings
-	clk_per_second -= clk_overhead;
-	clk_per_milisec = clk_per_second / 1000;
-	clk_per_microsec = clk_per_milisec / 1000;
+clk_overhead = 0;
+for (int i = 0; i < 256; i++)
+{
+u64 start = GetCLK();
+clk_overhead += (GetCLK() - start);
+}
+clk_overhead /= 256;
 
-	// Setup conversion factors for high-precision doubles
-	double a = 1.0;
-	double b = double(clk_per_second);
-	clk_to_seconds = float(a / b);
+qpc_overhead = 0;
+for (int i = 0; i < 256; i++)
+{
+u64 start = QPC();
+qpc_overhead += (QPC() - start);
+}
+qpc_overhead /= 256;
 
-	a = 1000.0;
-	clk_to_milisec = float(a / b);
+clk_per_milisec = clk_per_second / 1000;
+clk_per_microsec = clk_per_milisec / 1000;
 
-	a = 1000000.0;
-	clk_to_microsec = float(a / b);
+double a = 1.0;
+double b = double(clk_per_second);
+clk_to_seconds = float(a / b);
 
-	// Ensure the OS timer resolution is set to 1ms globally for the engine
-	timeBeginPeriod(1);
+a = 1000.0;
+clk_to_milisec = float(a / b);
+
+a = 1000000.0;
+clk_to_microsec = float(a / b);
+
+timeBeginPeriod(1);
 }
 };
 
 bool g_initialize_cpu_called = false;
 
-//------------------------------------------------------------------------------------
 void _initialize_cpu(void)
 {
-	Msg("* Detected CPU: %s [%s], F%d/M%d/S%d, %.2f mhz, %d-clk 'rdtsc'",
-	    CPU::ID.model_name, CPU::ID.v_name,
-	    CPU::ID.family, CPU::ID.model, CPU::ID.stepping,
-	    float(CPU::clk_per_second / u64(1000000)),
-	    u32(CPU::clk_overhead)
-	);
+Msg("* Detected CPU: %s [%s], F%d/M%d/S%d, %.2f mhz, %d-clk 'rdtsc'",
+    CPU::ID.model_name, CPU::ID.v_name,
+    CPU::ID.family, CPU::ID.model, CPU::ID.stepping,
+    float(CPU::clk_per_second / u64(1000000)),
+    u32(CPU::clk_overhead)
+);
 
-	// DUMP_PHASE;
+if (Core.ParamsData.test(ECoreParams::x86))
+{
+CPU::ID.feature &= ~_CPU_FEATURE_MMX;
+CPU::ID.feature &= ~_CPU_FEATURE_3DNOW;
+CPU::ID.feature &= ~_CPU_FEATURE_SSE;
+CPU::ID.feature &= ~_CPU_FEATURE_SSE2;
+CPU::ID.feature &= ~_CPU_FEATURE_SSE3;
+CPU::ID.feature &= ~_CPU_FEATURE_SSSE3;
+CPU::ID.feature &= ~_CPU_FEATURE_SSE4_1;
+CPU::ID.feature &= ~_CPU_FEATURE_SSE4_2;
+};
 
-	if (Core.ParamsData.test(ECoreParams::x86))
-	{
-		CPU::ID.feature &= ~_CPU_FEATURE_MMX;
-		CPU::ID.feature &= ~_CPU_FEATURE_3DNOW;
-		CPU::ID.feature &= ~_CPU_FEATURE_SSE;
-		CPU::ID.feature &= ~_CPU_FEATURE_SSE2;
-		CPU::ID.feature &= ~_CPU_FEATURE_SSE3;
-		CPU::ID.feature &= ~_CPU_FEATURE_SSSE3;
-		CPU::ID.feature &= ~_CPU_FEATURE_SSE4_1;
-		CPU::ID.feature &= ~_CPU_FEATURE_SSE4_2;
-	};
+string256 features;
+xr_strcpy(features, sizeof(features), "RDTSC");
+if (CPU::ID.feature & _CPU_FEATURE_MMX) xr_strcat(features, ", MMX");
+if (CPU::ID.feature & _CPU_FEATURE_3DNOW) xr_strcat(features, ", 3DNow!");
+if (CPU::ID.feature & _CPU_FEATURE_SSE) xr_strcat(features, ", SSE");
+if (CPU::ID.feature & _CPU_FEATURE_SSE2) xr_strcat(features, ", SSE2");
+if (CPU::ID.feature & _CPU_FEATURE_SSE3) xr_strcat(features, ", SSE3");
+if (CPU::ID.feature & _CPU_FEATURE_SSSE3) xr_strcat(features, ", SSSE3");
+if (CPU::ID.feature & _CPU_FEATURE_SSE4_1)xr_strcat(features, ", SSE4.1");
+if (CPU::ID.feature & _CPU_FEATURE_SSE4_2)xr_strcat(features, ", SSE4.2");
+if (CPU::ID.feature & _CPU_FEATURE_HTT) xr_strcat(features, ", HTT");
+if (CPU::ID.feature & _CPU_FEATURE_AVX) xr_strcat(features, ", AVX");
+if (CPU::ID.feature & _CPU_FEATURE_AVX2) xr_strcat(features, ", AVX2");
+if (CPU::ID.feature & _CPU_FEATURE_INVARIANT_TSC) xr_strcat(features, ", Invariant TSC");
+if (CPU::ID.feature & _CPU_FEATURE_RDTSCP) xr_strcat(features, ", RDTSCP");
+if (CPU::ID.feature & _CPU_FEATURE_WAITPKG) xr_strcat(features, ", WAITPKG");
 
-	string256 features;
-	xr_strcpy(features, sizeof(features), "RDTSC");
-	if (CPU::ID.feature & _CPU_FEATURE_MMX) xr_strcat(features, ", MMX");
-	if (CPU::ID.feature & _CPU_FEATURE_3DNOW) xr_strcat(features, ", 3DNow!");
-	if (CPU::ID.feature & _CPU_FEATURE_SSE) xr_strcat(features, ", SSE");
-	if (CPU::ID.feature & _CPU_FEATURE_SSE2) xr_strcat(features, ", SSE2");
-	if (CPU::ID.feature & _CPU_FEATURE_SSE3) xr_strcat(features, ", SSE3");
-	if (CPU::ID.feature & _CPU_FEATURE_SSSE3) xr_strcat(features, ", SSSE3");
-	if (CPU::ID.feature & _CPU_FEATURE_SSE4_1)xr_strcat(features, ", SSE4.1");
-	if (CPU::ID.feature & _CPU_FEATURE_SSE4_2)xr_strcat(features, ", SSE4.2");
-	if (CPU::ID.feature & _CPU_FEATURE_HTT) xr_strcat(features, ", HTT");
+Msg("* CPU features: %s", features);
+Msg("* CPU cores/threads: %d/%d\n", CPU::ID.n_cores, CPU::ID.n_threads);
 
-	Msg("* CPU features: %s", features);
-	Msg("* CPU cores/threads: %d/%d\n", CPU::ID.n_cores, CPU::ID.n_threads);
+Fidentity.identity();
+Didentity.identity();
+pvInitializeStatics();
+FPU::initialize();
+_initialize_cpu_thread();
 
-	Fidentity.identity(); // Identity matrix
-	Didentity.identity(); // Identity matrix
-	pvInitializeStatics(); // Lookup table for compressed normals
-	FPU::initialize();
-	_initialize_cpu_thread();
+Msg("* [Timer] Invariant TSC: %s", CPU::bUseInvariantTSC ? "SUPPORTED" : "NOT SUPPORTED");
+Msg("* [Timer] Active Root QPC: %s", CPU::bUseInvariantTSC ? "HARDWARE INVARIANT RDTSC (Sub-8ns, 0-HAL)" : "Windows QPC (HAL Trap)");
+Msg("* [Timer] Calibrated Frequency: %.2f MHz (Period: %.4f ns)", float(CPU::clk_per_second / 1000000.0), (1000000000.0 / double(CPU::clk_per_second)));
+Msg("* [Timer] QPC Scale Factor: %.6f (10.00 MHz Target)", CPU::qpc_scale);
+CPU::TimerBenchmark();
 
-	g_initialize_cpu_called = true;
+g_initialize_cpu_called = true;
 }
 
 #ifdef M_BORLAND
@@ -299,7 +337,6 @@ void _initialize_cpu_thread()
 {
 }
 #else
-// per-thread initialization
 #include <xmmintrin.h>
 #define _MM_DENORMALS_ZERO_MASK 0x0040
 #define _MM_DENORMALS_ZERO_ON 0x0040
@@ -313,109 +350,99 @@ void debug_on_thread_spawn();
 
 void _initialize_cpu_thread()
 {
-	debug_on_thread_spawn();
+debug_on_thread_spawn();
 #ifndef XRCORE_STATIC
-	// fpu & sse
-	FPU::m64r(); // set 64 bit mode
-#endif // XRCORE_STATIC
-	if (CPU::ID.feature & _CPU_FEATURE_SSE)
-	{
-		//_mm_setcsr ( _mm_getcsr() | (_MM_FLUSH_ZERO_ON+_MM_DENORMALS_ZERO_ON) );
-		_MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-		if (_denormals_are_zero_supported)
-		{
-			__try
-			{
-				_MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-			}
-			__except (EXCEPTION_EXECUTE_HANDLER)
-			{
-				_denormals_are_zero_supported = FALSE;
-			}
-		}
-	}
+FPU::m64r();
+#endif
+if (CPU::ID.feature & _CPU_FEATURE_SSE)
+{
+_MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+if (_denormals_are_zero_supported)
+{
+__try
+{
+_MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+}
+__except (EXCEPTION_EXECUTE_HANDLER)
+{
+_denormals_are_zero_supported = FALSE;
+}
+}
+}
 }
 #endif
-// threading API
+
 #pragma pack(push,8)
 struct THREAD_NAME
 {
-	DWORD dwType;
-	LPCSTR szName;
-	DWORD dwThreadID;
-	DWORD dwFlags;
+DWORD dwType;
+LPCSTR szName;
+DWORD dwThreadID;
+DWORD dwFlags;
 };
 
 void thread_name(const char* name)
 {
-	THREAD_NAME tn;
-	tn.dwType = 0x1000;
-	tn.szName = name;
-	tn.dwThreadID = DWORD(-1);
-	tn.dwFlags = 0;
-	__try
-	{
-		RaiseException(0x406D1388, 0, sizeof(tn) / sizeof(DWORD), (ULONG_PTR *)&tn);
-	}
-	__except (EXCEPTION_CONTINUE_EXECUTION)
-	{
-	}
+THREAD_NAME tn;
+tn.dwType = 0x1000;
+tn.szName = name;
+tn.dwThreadID = DWORD(-1);
+tn.dwFlags = 0;
+__try
+{
+RaiseException(0x406D1388, 0, sizeof(tn) / sizeof(DWORD), (ULONG_PTR *)&tn);
+}
+__except (EXCEPTION_CONTINUE_EXECUTION)
+{
+}
 }
 #pragma pack(pop)
 
 struct THREAD_STARTUP
 {
-	thread_t* entry;
-	char* name;
-	void* args;
+thread_t* entry;
+char* name;
+void* args;
 };
 
 void __cdecl thread_entry(void* _params)
 {
-	// initialize
-	THREAD_STARTUP* startup = (THREAD_STARTUP*)_params;
-	thread_name(startup->name);
-	thread_t* entry = startup->entry;
-	void* arglist = startup->args;
-	_initialize_cpu_thread();
+THREAD_STARTUP* startup = (THREAD_STARTUP*)_params;
+thread_name(startup->name);
+thread_t* entry = startup->entry;
+void* arglist = startup->args;
+_initialize_cpu_thread();
 
-	// emit profiler thread
-	PROF_THREAD(startup->name);
+PROF_THREAD(startup->name);
 
-	// clean up
-	xr_delete(startup);
+xr_delete(startup);
 
-	// call
-	entry(arglist);
+entry(arglist);
 }
 
 void thread_spawn(thread_t* entry, const char* name, unsigned stack, void* arglist)
 {
-	Debug._initialize(false);
+Debug._initialize(false);
 
-	THREAD_STARTUP* startup = xr_new<THREAD_STARTUP>();
-	startup->entry = entry;
-	startup->name = (char*)name;
-	startup->args = arglist;
-	_beginthread(thread_entry, stack, startup);
+THREAD_STARTUP* startup = xr_new<THREAD_STARTUP>();
+startup->entry = entry;
+startup->name = (char*)name;
+startup->args = arglist;
+_beginthread(thread_entry, stack, startup);
 }
 
 unsigned __stdcall thread_entry_ex(void* _params)
 {
-    // initialize
     THREAD_STARTUP* startup = (THREAD_STARTUP*)_params;
     thread_name(startup->name);
     thread_t* entry = startup->entry;
     void* arglist = startup->args;
     _initialize_cpu_thread();
 
-    // emit profiler thread
     PROF_THREAD(startup->name);
 
-    // clean up
     xr_delete(startup);
 
-    // call
     entry(arglist);
     return 0;
 }
@@ -428,49 +455,24 @@ HANDLE thread_spawn_ex(thread_t* entry, const char* name, unsigned stack, void* 
     startup->entry = entry;
     startup->name = (char*)name;
     startup->args = arglist;
-    // _beginthreadex (not _beginthread): its handle stays valid and joinable
-    // until the caller CloseHandle()s it; _beginthread's handle is closed
-    // automatically on thread exit, making it unsafe to wait on.
     return (HANDLE)_beginthreadex(NULL, stack, thread_entry_ex, startup, 0, NULL);
 }
 
-//void spline1(float t, Fvector* p, Fvector* ret)
-//{
-//    float t2 = t * t;
-//    float t3 = t2 * t;
-//    float m[4];
-//
-//    ret->x = 0.0f;
-//    ret->y = 0.0f;
-//    ret->z = 0.0f;
-//    m[0] = (0.5f * ((-1.0f * t3) + (2.0f * t2) + (-1.0f * t)));
-//    m[1] = (0.5f * ((3.0f * t3) + (-5.0f * t2) + (0.0f * t) + 2.0f));
-//    m[2] = (0.5f * ((-3.0f * t3) + (4.0f * t2) + (1.0f * t)));
-//    m[3] = (0.5f * ((1.0f * t3) + (-1.0f * t2) + (0.0f * t)));
-//
-//    for (int i = 0; i < 4; i++)
-//    {
-//        ret->x += p[i].x * m[i];
-//        ret->y += p[i].y * m[i];
-//        ret->z += p[i].z * m[i];
-//    }
-//}
-
 void spline2(float t, Fvector* p, Fvector* ret)
 {
-	float s = 1.0f - t;
-	float t2 = t * t;
-	float t3 = t2 * t;
-	float m[4];
+float s = 1.0f - t;
+float t2 = t * t;
+float t3 = t2 * t;
+float m[4];
 
-	m[0] = s * s * s;
-	m[1] = 3.0f * t3 - 6.0f * t2 + 4.0f;
-	m[2] = -3.0f * t3 + 3.0f * t2 + 3.0f * t + 1;
-	m[3] = t3;
+m[0] = s * s * s;
+m[1] = 3.0f * t3 - 6.0f * t2 + 4.0f;
+m[2] = -3.0f * t3 + 3.0f * t2 + 3.0f * t + 1;
+m[3] = t3;
 
-	ret->x = (p[0].x * m[0] + p[1].x * m[1] + p[2].x * m[2] + p[3].x * m[3]) / 6.0f;
-	ret->y = (p[0].y * m[0] + p[1].y * m[1] + p[2].y * m[2] + p[3].y * m[3]) / 6.0f;
-	ret->z = (p[0].z * m[0] + p[1].z * m[1] + p[2].z * m[2] + p[3].z * m[3]) / 6.0f;
+ret->x = (p[0].x * m[0] + p[1].x * m[1] + p[2].x * m[2] + p[3].x * m[3]) / 6.0f;
+ret->y = (p[0].y * m[0] + p[1].y * m[1] + p[2].y * m[2] + p[3].y * m[3]) / 6.0f;
+ret->z = (p[0].z * m[0] + p[1].z * m[1] + p[2].z * m[2] + p[3].z * m[3]) / 6.0f;
 }
 
 #define beta1 1.0f
@@ -478,20 +480,20 @@ void spline2(float t, Fvector* p, Fvector* ret)
 
 void spline3(float t, Fvector* p, Fvector* ret)
 {
-	float s = 1.0f - t;
-	float t2 = t * t;
-	float t3 = t2 * t;
-	float b12 = beta1 * beta2;
-	float b13 = b12 * beta1;
-	float delta = 2.0f - b13 + 4.0f * b12 + 4.0f * beta1 + beta2 + 2.0f;
-	float d = 1.0f / delta;
-	float b0 = 2.0f * b13 * d * s * s * s;
-	float b3 = 2.0f * t3 * d;
-	float b1 = d * (2 * b13 * t * (t2 - 3 * t + 3) + 2 * b12 * (t3 - 3 * t2 + 2) + 2 * beta1 * (t3 - 3 * t + 2) + beta2
-		* (2 * t3 - 3 * t2 + 1));
-	float b2 = d * (2 * b12 * t2 * (-t + 3) + 2 * beta1 * t * (-t2 + 3) + beta2 * t2 * (-2 * t + 3) + 2 * (-t3 + 1));
+float s = 1.0f - t;
+float t2 = t * t;
+float t3 = t2 * t;
+float b12 = beta1 * beta2;
+float b13 = b12 * beta1;
+float delta = 2.0f - b13 + 4.0f * b12 + 4.0f * beta1 + beta2 + 2.0f;
+float d = 1.0f / delta;
+float b0 = 2.0f * b13 * d * s * s * s;
+float b3 = 2.0f * t3 * d;
+float b1 = d * (2 * b13 * t * (t2 - 3 * t + 3) + 2 * b12 * (t3 - 3 * t2 + 2) + 2 * beta1 * (t3 - 3 * t + 2) + beta2
+* (2 * t3 - 3 * t2 + 1));
+float b2 = d * (2 * b12 * t2 * (-t + 3) + 2 * beta1 * t * (-t2 + 3) + beta2 * t2 * (-2 * t + 3) + 2 * (-t3 + 1));
 
-	ret->x = p[0].x * b0 + p[1].x * b1 + p[2].x * b2 + p[3].x * b3;
-	ret->y = p[0].y * b0 + p[1].y * b1 + p[2].y * b2 + p[3].y * b3;
-	ret->z = p[0].z * b0 + p[1].z * b1 + p[2].z * b2 + p[3].z * b3;
+ret->x = p[0].x * b0 + p[1].x * b1 + p[2].x * b2 + p[3].x * b3;
+ret->y = p[0].y * b0 + p[1].y * b1 + p[2].y * b2 + p[3].y * b3;
+ret->z = p[0].z * b0 + p[1].z * b1 + p[2].z * b2 + p[3].z * b3;
 }
