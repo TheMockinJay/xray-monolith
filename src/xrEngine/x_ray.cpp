@@ -230,15 +230,7 @@ PROTECT_API void InitSettings()
 
 	// -dbg: the multiplayer auth hash over this gamedata, so FS changes can be
 	// checked against it (same value before and after = same files hashed)
-	if (Core.isDebug())
-	{
-		CTimer auth_timer;
-		auth_timer.Start();
-		FS.auth_generate(tmp_ignore_pathes, tmp_check_pathes);
-		Msg("* FS auth hash: %016llx (%u ms)", FS.auth_get(), auth_timer.GetElapsed_ms());
-	}
-
-	FS.update_path(fname, "$game_config$", "game.ltx");
+FS.update_path(fname, "$game_config$", "game.ltx");
 	pGameIni = xr_new<CInifile>(fname, TRUE);
 	CHECK_OR_EXIT(0 != pGameIni->section_count(),
 	              make_string("Cannot find file %s.\nReinstalling application may fix this problem.", fname));
@@ -356,12 +348,12 @@ void CheckPrivilegySlowdown()
 #ifdef DEBUG
     if (Core.ParamsData.test(ECoreParams::slowdown))
     {
-        thread_spawn(slowdownthread, "slowdown", 0, 0);
+        
     }
     if (Core.ParamsData.test(ECoreParams::slowdown2x))
     {
-        thread_spawn(slowdownthread, "slowdown", 0, 0);
-        thread_spawn(slowdownthread, "slowdown", 0, 0);
+        
+        
     }
 #endif // DEBUG
 }
