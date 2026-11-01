@@ -356,12 +356,12 @@ void CheckPrivilegySlowdown()
 #ifdef DEBUG
     if (Core.ParamsData.test(ECoreParams::slowdown))
     {
-        thread_spawn(slowdownthread, "slowdown", 0, 0);
+        
     }
     if (Core.ParamsData.test(ECoreParams::slowdown2x))
     {
-        thread_spawn(slowdownthread, "slowdown", 0, 0);
-        thread_spawn(slowdownthread, "slowdown", 0, 0);
+        
+        
     }
 #endif // DEBUG
 }
