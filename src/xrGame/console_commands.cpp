@@ -398,7 +398,7 @@ static void full_memory_stats(bool assert = true)
 	u32 _eco_strings_unique_count = 0;
 	int _eco_strings = (int)g_pStringContainer->stat_economy(_eco_strings_count, _eco_strings_unique_count);
 	int _eco_smem = (int)g_pSharedMemoryContainer->stat_economy();
-	u32 m_base = 0, c_base = 0, m_lmaps = 0, c_lmaps = 0;
+	u64 m_base = 0, m_lmaps = 0; u32 c_base = 0, c_lmaps = 0;
 
 	//if (Device.Resources)	Device.Resources->_GetMemoryUsage	(m_base,c_base,m_lmaps,c_lmaps);
 	//	Resource check moved to m_pRender
@@ -406,7 +406,7 @@ static void full_memory_stats(bool assert = true)
 
 	log_vminfo();
 
-	Msg("* [ D3D ]: textures[%d K]", (m_base + m_lmaps) / 1024);
+	Msg("* [ D3D ]: textures[%llu K]", (m_base + m_lmaps) / 1024);
 
 #ifndef SEVERAL_ALLOCATORS
 	Msg("* [x-ray]: process heap[%u K]", _process_heap / 1024);

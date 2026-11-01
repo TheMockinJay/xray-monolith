@@ -244,6 +244,20 @@ void dxEnvironmentRender::OnFrame(CEnvironment& env)
 	}
 
 	//. Setup skybox textures, somewhat ugly
+	if (mixRen.sky_r_textures_env.size() >= 2)
+	{
+		if (mixRen.sky_r_textures_env[0].second && !mixRen.sky_r_textures_env[0].second->flags.bLoaded)
+			mixRen.sky_r_textures_env[0].second->Load();
+		if (mixRen.sky_r_textures_env[1].second && !mixRen.sky_r_textures_env[1].second->flags.bLoaded)
+			mixRen.sky_r_textures_env[1].second->Load();
+	}
+	if (mixRen.clouds_r_textures.size() >= 2)
+	{
+		if (mixRen.clouds_r_textures[0].second && !mixRen.clouds_r_textures[0].second->flags.bLoaded)
+			mixRen.clouds_r_textures[0].second->Load();
+		if (mixRen.clouds_r_textures[1].second && !mixRen.clouds_r_textures[1].second->flags.bLoaded)
+			mixRen.clouds_r_textures[1].second->Load();
+	}
 	ID3DBaseTexture* e0 = mixRen.sky_r_textures[0].second->surface_get();
 	ID3DBaseTexture* e1 = mixRen.sky_r_textures[1].second->surface_get();
 

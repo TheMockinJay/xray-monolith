@@ -189,21 +189,13 @@ void CRender::level_Unload()
 	//*** Shaders
 	Shaders.clear_and_free();
 
-	const bool clearResources = psDeviceFlags2.test(rsClearAllResources);
-	if (psDeviceFlags2.test(rsClearModels) || clearResources)
-	{
-		Models->ClearPool(true);
-		Visuals.clear_and_free();
-		if (clearResources)
-		{
-			dxRenderDeviceRender::Instance().Resources->UnloadAllTexturesOnLevelUnload();
-			dxRenderDeviceRender::Instance().ResourcesDestroyNecessaryTextures();
-			dxRenderDeviceRender::Instance().Resources->Evict();
-		}
-		dxRenderDeviceRender::Instance().Resources->Dump(false);
-		//static int unload_counter = 0;
-		//Msg("The Level Unloaded.======================== %d", ++unload_counter);
-	}
+	Models->ClearPool(true);
+	Visuals.clear_and_free();
+	dxRenderDeviceRender::Instance().Resources->UnloadAllTexturesOnLevelUnload();
+	dxRenderDeviceRender::Instance().ResourcesDestroyNecessaryTextures();
+	dxRenderDeviceRender::Instance().Resources->Evict();
+	dxRenderDeviceRender::Instance().Resources->Dump(true);
+	Memory.mem_compact();
 
 	b_loaded = FALSE;
 }

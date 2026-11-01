@@ -159,6 +159,7 @@ void CResourceManager::OnDeviceCreate(LPCSTR shName)
 
 void CResourceManager::StoreNecessaryTextures()
 {
+	return;
     xrCriticalSectionGuard guard(creationGuard);
     for (const auto& entry : m_textures)
     {
